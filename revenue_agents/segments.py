@@ -14,7 +14,7 @@ from pathlib import Path
 import yaml
 from pydantic import Field, ValidationError, field_validator, model_validator
 
-from revenue_agents.models import Engagement, Enrichment, Model
+from revenue_agents.models import Engagement, Enrichment, Model, Tier
 
 SEGMENTS_DIR = Path(__file__).resolve().parent.parent / "segments"
 SEGMENT_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
@@ -108,6 +108,19 @@ class Templates(Model):
     first_touch_body: str
 
 
+class AutonomyConfig(Model):
+    """Segment-level autonomy settings. A pack may tighten the policy, never loosen it."""
+
+    first_touch_approval_tiers: list[Tier] = Field(default_factory=lambda: [Tier.A])
+
+    @field_validator("first_touch_approval_tiers")
+    @classmethod
+    def tier_a_always_needs_approval(cls, value: list[Tier]) -> list[Tier]:
+        if Tier.A not in value:
+            raise ValueError("first contact with Tier A leads always needs approval; a pack can add tiers but not remove A")
+        return value
+
+
 class SegmentPack(Model):
     """One segment's complete configuration."""
 
@@ -118,6 +131,7 @@ class SegmentPack(Model):
     scoring: ScoringConfig
     messaging: Messaging
     templates: Templates
+    autonomy: AutonomyConfig = Field(default_factory=AutonomyConfig)
 
 
 # --- Loading ---------------------------------------------------------------

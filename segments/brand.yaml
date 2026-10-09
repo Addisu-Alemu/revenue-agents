@@ -93,3 +93,8 @@ templates:
 
     Best,
     {sender_name}
+
+# Autonomy: which tiers need human approval before the FIRST email.
+# Tier A always does (enforced in code). A pack can add tiers, never remove A.
+autonomy:
+  first_touch_approval_tiers: [A]

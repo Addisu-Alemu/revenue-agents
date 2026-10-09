@@ -71,3 +71,21 @@ def test_unknown_engagement_field_is_rejected(tmp_path, brand_config):
 def test_file_name_must_match_segment(tmp_path, brand_config):
     with pytest.raises(SegmentConfigError, match="expected 'retail'"):
         registry_with(tmp_path, brand_config, name="retail").get("retail")
+
+
+def test_autonomy_defaults_to_tier_a_approval(tmp_path, brand_config):
+    del brand_config["autonomy"]
+    pack = registry_with(tmp_path, brand_config).get("brand")
+    assert pack.autonomy.first_touch_approval_tiers == ["A"]
+
+
+def test_pack_can_tighten_autonomy(tmp_path, brand_config):
+    brand_config["autonomy"] = {"first_touch_approval_tiers": ["A", "B"]}
+    pack = registry_with(tmp_path, brand_config).get("brand")
+    assert pack.autonomy.first_touch_approval_tiers == ["A", "B"]
+
+
+def test_pack_cannot_loosen_autonomy(tmp_path, brand_config):
+    brand_config["autonomy"] = {"first_touch_approval_tiers": ["B"]}
+    with pytest.raises(SegmentConfigError, match="can add tiers but not remove A"):
+        registry_with(tmp_path, brand_config).get("brand")
