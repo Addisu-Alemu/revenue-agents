@@ -1,0 +1,95 @@
+# Segment config pack: Brands (including franchise and multi-location brands)
+#
+# Everything segment-specific lives here. Agents and skills read this file
+# and contain no brand-specific code. Validated by revenue_agents/segments.py.
+
+segment: brand
+display_name: Brands (franchise and multi-location)
+
+icp_summary: >
+  Franchise or multi-location brands with 50+ locations and $1M+ in yearly
+  ad spend, who need local versions of national campaigns without losing
+  brand control.
+
+# Cool AI products that fit this segment (used for proposals and IO line items).
+products:
+  - "Create: Dynamic Creative Optimization"
+  - "Activate: Franchise & Location Targeting"
+  - "Optimize: Location-Level Measurement"
+
+scoring:
+  # How much each sub-score counts toward the total. Must add up to 1.
+  weights:
+    fit: 0.5
+    intent: 0.3
+    engagement: 0.2
+
+  # Minimum total score (0-100) for each tier. Anything below B is Tier C.
+  tiers:
+    A: 70
+    B: 30
+
+  # Fit: points for each ICP match, checked against enrichment data.
+  # Each rule uses exactly one check: gte, one_of or contains_any.
+  fit_rules:
+    - field: business_model
+      one_of: [franchise, multi-location]
+      points: 30
+      reason: Franchise or multi-location business
+    - field: locations
+      gte: 50
+      points: 25
+      reason: 50+ locations that need local ads
+    - field: annual_ad_spend_usd
+      gte: 1000000
+      points: 25
+      reason: Spends $1M+ a year on ads
+    - field: tech_stack
+      contains_any: [The Trade Desk, DV360, Amazon DSP]
+      points: 10
+      reason: Already buys programmatic media
+    - field: employees
+      gte: 200
+      points: 10
+      reason: Large enough team to run a pilot
+
+  # Intent: points per buying-signal type from enrichment (capped at 100).
+  intent_points:
+    expansion: 35
+    campaign: 30
+    hiring: 25
+
+  # Engagement: points per interaction (capped at 100).
+  engagement_points:
+    email_opens: 5
+    link_clicks: 10
+    website_visits: 5
+    pricing_page_visits: 15
+
+messaging:
+  tone: Warm, concise and specific to their locations. No hype.
+  value_props:
+    - Turn one national ad into a local version for every location, automatically.
+    - Franchisees can only change the fields corporate allows, with approval built in.
+    - Target around each store and see results per location.
+  call_to_action: a 30-minute call next week
+  # Phrases outreach must never use. Enforced in code, not just in the prompt.
+  avoid_phrases:
+    - guarantee
+    - revolutionary
+    - cheapest
+    - discount
+
+templates:
+  first_touch_subject: Local ads for every {company} location
+  first_touch_body: |
+    Hi {first_name},
+
+    {opening}
+
+    {value_prop}
+
+    Would you be open to {call_to_action}?
+
+    Best,
+    {sender_name}
