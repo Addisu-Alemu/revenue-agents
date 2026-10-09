@@ -4,21 +4,26 @@
                                             -> NEEDS_APPROVAL: approval queue -> human -> execute
                                             -> BLOCKED:        nothing happens
 
-Every step is written to the audit log. Executed action ids are remembered,
-so a retried event can't send the same email twice (idempotency).
+Every step is written to the audit log. Before an action executes, its id is
+claimed atomically (see claims.py), so a retried or duplicated event can't
+run the same action twice, even when copies arrive at the same moment.
+
+Delivery is at-most-once: if the process crashes mid-handler, the claim stays
+"in progress" and the action is not retried automatically. For emails and
+contracts, "maybe not sent" (a human can resend) is safer than "sent twice".
+Stuck claims are listed by ActionClaims.in_progress() for review.
 """
 
 from __future__ import annotations
 
 from enum import Enum
-from pathlib import Path
 from typing import Any, Callable
 
 from revenue_agents.guardrails.approvals import ApprovalQueue, ApprovalStatus
 from revenue_agents.guardrails.audit import AuditLog
+from revenue_agents.guardrails.claims import ActionClaims
 from revenue_agents.guardrails.policy import Action, ActionType, AutonomyPolicy, Decision
 from revenue_agents.models import Deal, Model
-from revenue_agents.storage import STATE_DIR, read_json, write_json
 
 Handler = Callable[[Action], Any]
 
@@ -44,19 +49,18 @@ class ActionGateway:
         approvals: ApprovalQueue,
         audit: AuditLog,
         handlers: dict[ActionType, Handler],
-        executed_path: Path = STATE_DIR / "executed_actions.json",
+        claims: ActionClaims | None = None,
     ) -> None:
         self._policy = policy
         self._approvals = approvals
         self._audit = audit
         self._handlers = handlers
-        self._executed_path = Path(executed_path)
+        self._claims = claims or ActionClaims()
 
     def submit(self, action: Action, deal: Deal) -> ActionResult:
         """An agent proposes an action. The policy decides what happens to it."""
-        if self._already_executed(action.id):
-            self._log(action, "duplicate_ignored", "Action already executed")
-            return ActionResult(action_id=action.id, outcome=Outcome.DUPLICATE, reason="Action already executed")
+        if self._claims.exists(action.id):
+            return self._duplicate(action)
 
         decision = self._policy.decide(action, deal)
         self._log(action, f"policy_{decision.decision.value}", f"[{decision.rule}] {decision.reason}")
@@ -73,8 +77,8 @@ class ActionGateway:
         request = self._approvals.get(request_id)
         if request.status is not ApprovalStatus.APPROVED:
             raise PermissionError(f"request '{request_id}' is {request.status.value}, not approved")
-        if self._already_executed(request.action.id):
-            return ActionResult(action_id=request.action.id, outcome=Outcome.DUPLICATE, reason="Action already executed")
+        if self._claims.exists(request.action.id):
+            return self._duplicate(request.action)
 
         decision = self._policy.decide(request.action, deal)
         if decision.decision is Decision.BLOCKED:
@@ -89,16 +93,24 @@ class ActionGateway:
             self._log(action, "no_handler", f"No handler registered for {action.type.value}")
             return ActionResult(action_id=action.id, outcome=Outcome.BLOCKED, reason="No handler registered")
 
-        result = handler(action)
-        self._mark_executed(action.id)
+        # The atomic claim is what guarantees "once": the exists() checks above are only a shortcut.
+        if not self._claims.claim(action.id):
+            return self._duplicate(action)
+
+        try:
+            result = handler(action)
+        except Exception as error:
+            self._claims.release(action.id)
+            self._log(action, "failed", f"{type(error).__name__}: {error}")
+            raise
+
+        self._claims.complete(action.id)
         self._log(action, "executed", reason)
         return ActionResult(action_id=action.id, outcome=Outcome.EXECUTED, reason=reason, result=result)
 
-    def _already_executed(self, action_id: str) -> bool:
-        return action_id in read_json(self._executed_path, [])
-
-    def _mark_executed(self, action_id: str) -> None:
-        write_json(self._executed_path, [*read_json(self._executed_path, []), action_id])
+    def _duplicate(self, action: Action) -> ActionResult:
+        self._log(action, "duplicate_ignored", "Action already executed or in progress")
+        return ActionResult(action_id=action.id, outcome=Outcome.DUPLICATE, reason="Action already executed or in progress")
 
     def _log(self, action: Action, event: str, detail: str) -> None:
         self._audit.record(action.agent, event, deal_id=action.deal_id, action_id=action.id, detail=detail)

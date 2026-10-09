@@ -153,10 +153,11 @@ flowchart LR
 - **Segments can tighten, never loosen.** `autonomy.first_touch_approval_tiers` defaults to `[A]`. A pack may add `B`. A pack without `A` is **rejected at load time**.
 - **Scoped tools per agent:** `AGENT_PERMISSIONS` maps each agent to the only action types it may propose.
 - **Approval doesn't bypass the kill switch.** Approved actions are re-checked right before execution.
-- **Idempotent execution:** each action has a deterministic id (e.g. `email:D-001:first_touch`). Executed ids are stored, so a retried webhook can't send an email twice. The approval queue is keyed by the same id, so resubmitting doesn't create duplicate requests.
+- **Idempotent, race-safe execution:** each action has a deterministic id (e.g. `email:D-001:first_touch`). Before running, the gateway **claims** the id by creating a marker file with `O_CREAT | O_EXCL`. The OS guarantees only one caller wins, even across processes, so two copies of a webhook arriving at the same moment send **one** email. (A check-then-act version sent 4 emails out of 10 concurrent deliveries; the claim sends 1. Both are covered by tests.) The approval queue is keyed by the same id and guarded by a file lock (`fcntl.flock`). Without it, 19 of 20 concurrent submissions were lost.
 - **Audit log:** append-only JSONL. Every policy decision, execution, duplicate and block is recorded with actor, deal, action and reason.
 - **Kill switch:** a file (`state/KILL_SWITCH`). An operator can stop everything without code changes or a restart.
-- **Durability:** state is written atomically (temp file + rename). *Trade-off:* the action is marked executed **after** its handler succeeds, so a crash in between can re-run it (at-least-once). Production handlers should pass the action id as an idempotency key to the provider (email, e-sign), and state would move to a database.
+- **Durability:** state is written atomically (unique temp file + rename). If a handler raises, the claim is released and the event can be retried.
+- *Trade-off: at-most-once.* If the process **crashes** mid-handler, the claim stays `in_progress` and the action is **not** auto-retried. For emails and contracts, "maybe not sent" (a human can resend) is safer than "sent twice" (a duplicate contract can't be unsent). Stuck claims are listed by `ActionClaims.in_progress()` and surface in stall detection. In production: a database with row-level locks or unique constraints in place of files, plus the action id passed to the provider (email, e-sign) as an idempotency key. File locks are POSIX-only and single-host, which is fine for the slice but not for a multi-host deployment.
 
 ## 7. Phased rollout
 

@@ -1,9 +1,13 @@
 """Every action goes through the gateway: policy, then execute, queue or block. Always audited."""
 
+import threading
+import time
+
 import pytest
 
 from revenue_agents.guardrails.approvals import ApprovalQueue
 from revenue_agents.guardrails.audit import AuditLog
+from revenue_agents.guardrails.claims import ActionClaims
 from revenue_agents.guardrails.gateway import ActionGateway, Outcome
 from revenue_agents.guardrails.kill_switch import KillSwitch
 from revenue_agents.guardrails.policy import Action, ActionType, AutonomyPolicy
@@ -14,10 +18,12 @@ from revenue_agents.segments import SegmentRegistry
 class RecordingHandler:
     """Stands in for a real side effect (sending an email) and remembers each call."""
 
-    def __init__(self):
+    def __init__(self, delay=0.0):
         self.calls = []
+        self.delay = delay
 
     def __call__(self, action):
+        time.sleep(self.delay)  # a slow send widens the window for a race
         self.calls.append(action.id)
         return f"done:{action.id}"
 
@@ -33,7 +39,7 @@ def setup(tmp_path):
         approvals,
         audit,
         handlers={ActionType.SEND_EMAIL: send_email},
-        executed_path=tmp_path / "executed.json",
+        claims=ActionClaims(tmp_path / "claims"),
     )
     return gateway, approvals, audit, kill_switch, send_email
 
@@ -135,3 +141,69 @@ def test_action_without_handler_is_blocked(setup, make_deal):
     gateway, _, _, _, _ = setup
     enrich = Action(id="enrich:D-001", type=ActionType.ENRICH_LEAD, agent="research", deal_id="D-001", summary="Enrich")
     assert gateway.submit(enrich, make_deal()).outcome is Outcome.BLOCKED
+
+
+# --- Concurrency and failures ------------------------------------------------
+
+
+def run_at_once(count, target):
+    """Start `count` threads that all call target(i) at the same instant."""
+    barrier = threading.Barrier(count)
+
+    def worker(i):
+        barrier.wait()
+        target(i)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+
+def test_same_action_delivered_concurrently_runs_once(setup, make_deal):
+    """Two workers receive the same webhook at the same moment: only one email goes out."""
+    gateway, _, _, _, send_email = setup
+    send_email.delay = 0.05
+    deal = make_deal(tier=Tier.B)
+    outcomes = []
+
+    run_at_once(10, lambda i: outcomes.append(gateway.submit(email(), deal).outcome))
+
+    assert send_email.calls == ["email:D-001:first"]
+    assert outcomes.count(Outcome.EXECUTED) == 1
+    assert outcomes.count(Outcome.DUPLICATE) == 9
+
+
+def test_concurrent_different_actions_are_all_remembered(setup, make_deal):
+    """No executed id is lost when many actions finish at the same moment."""
+    gateway, _, _, _, send_email = setup
+    deal = make_deal(tier=Tier.B)
+
+    run_at_once(20, lambda i: gateway.submit(email(f"email:D-001:{i}"), deal))
+    assert len(send_email.calls) == 20
+
+    retries = [gateway.submit(email(f"email:D-001:{i}"), deal).outcome for i in range(20)]
+    assert set(retries) == {Outcome.DUPLICATE}
+    assert len(send_email.calls) == 20
+
+
+def test_failed_action_can_be_retried(tmp_path, setup, make_deal):
+    gateway, _, audit, _, send_email = setup
+    deal = make_deal(tier=Tier.B)
+    attempts = []
+
+    def flaky(action):
+        attempts.append(action.id)
+        if len(attempts) == 1:
+            raise ConnectionError("email provider timed out")
+        return "sent"
+
+    gateway._handlers[ActionType.SEND_EMAIL] = flaky
+
+    with pytest.raises(ConnectionError):
+        gateway.submit(email(), deal)
+    assert audit.events()[-1].event == "failed"
+
+    assert gateway.submit(email(), deal).outcome is Outcome.EXECUTED
+    assert len(attempts) == 2

@@ -1,5 +1,7 @@
 """The approval queue and audit log persist to disk and can't be misused."""
 
+import threading
+
 import pytest
 
 from revenue_agents.guardrails.approvals import ApprovalQueue, ApprovalStatus
@@ -59,6 +61,48 @@ def test_unknown_request_raises(queue):
 def test_queue_survives_restart(tmp_path, send_io):
     ApprovalQueue(tmp_path / "approvals.json").submit(send_io, "IOs need approval")
     assert ApprovalQueue(tmp_path / "approvals.json").get("send_io:D-001").reason == "IOs need approval"
+
+
+def test_concurrent_submits_are_not_lost(queue):
+    """Many high-risk actions queued at the same moment: every request is kept."""
+    barrier = threading.Barrier(20)
+
+    def submit(i):
+        barrier.wait()
+        queue.submit(Action(id=f"send_io:D-{i}", type=ActionType.SEND_IO, agent="deal_desk",
+                            deal_id=f"D-{i}", summary="Send IO"), "IOs need approval")
+
+    threads = [threading.Thread(target=submit, args=(i,)) for i in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(queue.pending()) == 20
+
+
+def test_only_one_reviewer_can_decide(queue, send_io):
+    """Two reviewers click at the same moment: exactly one decision wins."""
+    queue.submit(send_io, "IOs need approval")
+    barrier = threading.Barrier(2)
+    results = []
+
+    def decide(fn, reviewer):
+        barrier.wait()
+        try:
+            fn("send_io:D-001", reviewer=reviewer)
+            results.append("ok")
+        except ValueError:
+            results.append("already decided")
+
+    threads = [threading.Thread(target=decide, args=(queue.approve, "maria")),
+               threading.Thread(target=decide, args=(queue.reject, "sam"))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(results) == ["already decided", "ok"]
 
 
 # --- Audit log ---------------------------------------------------------------
