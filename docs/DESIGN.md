@@ -69,7 +69,19 @@ Each pack (`segments/brand.yaml`) contains:
 
 ### Core skills
 
-*(to be completed: scoring, templating, IO generation, lesson retrieval)*
+Skills are reusable, segment-agnostic functions that agents call. Deterministic skills are plain Python and need no LLM.
+
+| Skill | What it does | LLM? |
+| --- | --- | --- |
+| **Enrichment** (`skills/enrichment.py`) | Looks up firmographics and buying signals by domain. Agents depend on the `Enricher` interface, so the mock JSON provider swaps for Clearbit, Apollo or ZoomInfo without touching agents. | No |
+| **Scoring** (`skills/scoring.py`) | Fit = sum of matched pack rules. Intent = points per signal type. Engagement = points per interaction. Each is capped at 100 and **comes with a reason listing what matched and what was missed**. Total = weighted sum. Tier = pack cut-offs. | No: the tier gates human approval, so it must be deterministic and testable |
+
+*(to be completed: templating, reply classification, transcript extraction, IO generation, lesson retrieval)*
+
+**Example output** (BrightBite, Tier A, total 97):
+> **Fit 100:** Matched: Franchise or multi-location business (+30); 50+ locations that need local ads (+25); Spends $1M+ a year on ads (+25); Already buys programmatic media (+10); Large enough team to run a pilot (+10).
+> **Intent 90:** Hiring a Director of Local Marketing (+25); Announced 60 new franchise locations (+35); Planning a national menu launch (+30).
+> **Engagement 100:** 4 email opens (+20); 2 link clicks (+20); 6 website visits (+30); 2 pricing page visits (+30).
 
 ## 4. Trigger map
 
