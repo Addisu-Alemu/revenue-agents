@@ -1,0 +1,76 @@
+{
+  "brightbite.example": {
+    "industry": "Quick-service restaurants",
+    "business_model": "franchise",
+    "employees": 3200,
+    "locations": 420,
+    "hq_country": "US",
+    "annual_ad_spend_usd": 4500000,
+    "tech_stack": ["Google Ads", "Meta Ads", "The Trade Desk"],
+    "signals": [
+      {"type": "hiring", "detail": "Hiring a Director of Local Marketing", "date": "2026-09-22"},
+      {"type": "expansion", "detail": "Announced 60 new franchise locations for 2027", "date": "2026-09-10"},
+      {"type": "campaign", "detail": "Planning a national menu launch in Q1 2027", "date": "2026-09-28"}
+    ]
+  },
+  "harborlane.example": {
+    "industry": "Home goods retail",
+    "business_model": "multi-location",
+    "employees": 450,
+    "locations": 35,
+    "hq_country": "US",
+    "annual_ad_spend_usd": 600000,
+    "tech_stack": ["Google Ads", "Meta Ads"],
+    "signals": [
+      {"type": "campaign", "detail": "Running a holiday season promotion", "date": "2026-09-30"}
+    ]
+  },
+  "pebbleandpine.example": {
+    "industry": "Direct-to-consumer candles",
+    "business_model": "single-location",
+    "employees": 12,
+    "locations": 1,
+    "hq_country": "US",
+    "annual_ad_spend_usd": 40000,
+    "tech_stack": ["Meta Ads"],
+    "signals": []
+  },
+  "lumenmedia.example": {
+    "industry": "Media agency",
+    "business_model": "agency",
+    "employees": 400,
+    "locations": 6,
+    "hq_country": "US",
+    "annual_ad_spend_usd": 38000000,
+    "tech_stack": ["The Trade Desk", "DV360", "Amazon DSP"],
+    "managed_clients": 55,
+    "signals": [
+      {"type": "client_win", "detail": "Won a national retail client account", "date": "2026-09-18"},
+      {"type": "hiring", "detail": "Hiring three programmatic traders", "date": "2026-09-25"}
+    ]
+  },
+  "copperline.example": {
+    "industry": "Creative agency",
+    "business_model": "agency",
+    "employees": 60,
+    "locations": 1,
+    "hq_country": "US",
+    "annual_ad_spend_usd": 3000000,
+    "tech_stack": ["Meta Ads", "Google Ads"],
+    "managed_clients": 14,
+    "signals": [
+      {"type": "campaign", "detail": "Pitching a regional restaurant chain", "date": "2026-09-27"}
+    ]
+  },
+  "solostudio.example": {
+    "industry": "Freelance design studio",
+    "business_model": "agency",
+    "employees": 3,
+    "locations": 1,
+    "hq_country": "PT",
+    "annual_ad_spend_usd": 50000,
+    "tech_stack": [],
+    "managed_clients": 4,
+    "signals": []
+  }
+}

@@ -1,0 +1,116 @@
+[
+  {
+    "id": "L-001",
+    "company": "BrightBite Burgers",
+    "domain": "brightbite.example",
+    "segment": "brand",
+    "contact": {
+      "name": "Maya Thompson",
+      "title": "VP of Marketing",
+      "email": "maya.thompson@brightbite.example"
+    },
+    "source": "inbound_form",
+    "created_at": "2026-10-01T09:15:00Z",
+    "engagement": {
+      "email_opens": 4,
+      "link_clicks": 2,
+      "website_visits": 6,
+      "pricing_page_visits": 2
+    }
+  },
+  {
+    "id": "L-002",
+    "company": "Harbor Lane Home",
+    "domain": "harborlane.example",
+    "segment": "brand",
+    "contact": {
+      "name": "Owen Castillo",
+      "title": "Marketing Manager",
+      "email": "owen.castillo@harborlane.example"
+    },
+    "source": "event_list",
+    "created_at": "2026-10-02T14:30:00Z",
+    "engagement": {
+      "email_opens": 1,
+      "link_clicks": 0,
+      "website_visits": 2,
+      "pricing_page_visits": 0
+    }
+  },
+  {
+    "id": "L-003",
+    "company": "Pebble & Pine Candles",
+    "domain": "pebbleandpine.example",
+    "segment": "brand",
+    "contact": {
+      "name": "Grace Okafor",
+      "title": "Founder",
+      "email": "grace@pebbleandpine.example"
+    },
+    "source": "purchased_list",
+    "created_at": "2026-10-03T08:00:00Z",
+    "engagement": {
+      "email_opens": 0,
+      "link_clicks": 0,
+      "website_visits": 0,
+      "pricing_page_visits": 0
+    }
+  },
+  {
+    "id": "L-004",
+    "company": "Lumen Media Group",
+    "domain": "lumenmedia.example",
+    "segment": "agency",
+    "contact": {
+      "name": "Priya Raman",
+      "title": "Head of Programmatic",
+      "email": "priya.raman@lumenmedia.example"
+    },
+    "source": "inbound_form",
+    "created_at": "2026-10-01T11:45:00Z",
+    "engagement": {
+      "email_opens": 3,
+      "link_clicks": 3,
+      "website_visits": 5,
+      "pricing_page_visits": 1
+    }
+  },
+  {
+    "id": "L-005",
+    "company": "Copperline Creative",
+    "domain": "copperline.example",
+    "segment": "agency",
+    "contact": {
+      "name": "Sam Whitfield",
+      "title": "Account Director",
+      "email": "sam.whitfield@copperline.example"
+    },
+    "source": "event_list",
+    "created_at": "2026-10-02T10:10:00Z",
+    "engagement": {
+      "email_opens": 2,
+      "link_clicks": 1,
+      "website_visits": 1,
+      "pricing_page_visits": 0
+    }
+  },
+  {
+    "id": "L-006",
+    "company": "Solo Studio",
+    "domain": "solostudio.example",
+    "segment": "agency",
+    "contact": {
+      "name": "Leo Martins",
+      "title": "Owner",
+      "email": "leo@solostudio.example"
+    },
+    "source": "purchased_list",
+    "created_at": "2026-10-04T16:20:00Z",
+    "engagement": {
+      "email_opens": 0,
+      "link_clicks": 0,
+      "website_visits": 0,
+      "pricing_page_visits": 0
+    }
+  }
+]

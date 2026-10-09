@@ -1,0 +1,57 @@
+Title: BrightBite Burgers x Cool AI - Discovery Call
+Date: 2026-10-08
+Duration: 32 minutes
+Source: Fireflies.ai
+Lead ID: L-001
+Participants:
+- Daniel Reyes (Account Executive, Cool AI)
+- Maya Thompson (VP of Marketing, BrightBite Burgers)
+- Ken Adeyemi (CFO, BrightBite Burgers)
+
+Transcript:
+
+[00:00:12] Daniel Reyes: Thanks for making the time, Maya. To start, can you walk me through how you produce ads for your locations today?
+
+[00:00:31] Maya Thompson: Sure. We have 420 locations, almost all franchised. Corporate makes the national ads, then every region wants a local version with their own prices, offers and store addresses. Our in-house team does that by hand and it takes about six weeks per campaign.
+
+[00:01:20] Daniel Reyes: Six weeks is a long time. What does that delay cost you?
+
+[00:01:28] Maya Thompson: Franchisees get frustrated and some run their own ads, which often break our brand guidelines. That's honestly the bigger problem for us. Brand consistency matters more to me than speed.
+
+[00:02:45] Daniel Reyes: That's helpful. Our Create product does dynamic creative, so one master ad can generate a local version for every location automatically. And franchisees only change the fields you allow.
+
+[00:03:10] Maya Thompson: That's the part I care about. Can corporate approve what franchisees are allowed to change?
+
+[00:03:18] Daniel Reyes: Yes. You set locked and editable fields, and every version goes through your approval rules before it runs.
+
+[00:05:02] Maya Thompson: Good. We have the national menu launch on March 1st, so anything we do needs to be live by then.
+
+[00:07:40] Daniel Reyes: Understood. Are you also buying media per location, or only nationally?
+
+[00:07:52] Maya Thompson: Mostly national through The Trade Desk, but we want local targeting around each store. That's something we can't do well today.
+
+[00:08:15] Daniel Reyes: That's our Activate franchise and location product. It targets around each store and reports results per location.
+
+[00:16:30] Ken Adeyemi: Joining now, sorry. Maya told me about the localization piece. What I need to understand is cost and how we would measure return.
+
+[00:16:52] Daniel Reyes: Of course. For measurement, our Optimize product reports results per location, so you can see which stores drive sales.
+
+[00:17:40] Ken Adeyemi: For a pilot, we have about 250 thousand dollars for Q1. If it works, we'd roll it out to all locations in the second half of the year.
+
+[00:18:05] Daniel Reyes: That works for a pilot. Would the pilot cover all 420 locations or a subset?
+
+[00:18:20] Maya Thompson: Let's start with the 120 locations in the Southeast region.
+
+[00:19:45] Ken Adeyemi: One concern. We've been burned before by vendors with long contracts. I'd want a three-month pilot with an option to extend, not a twelve-month commitment.
+
+[00:20:10] Daniel Reyes: That's reasonable. I'll reflect that in the proposal.
+
+[00:24:30] Ken Adeyemi: Final sign-off is mine for anything over 100 thousand, so the contract should come to me. Maya owns the day-to-day.
+
+[00:28:15] Daniel Reyes: Great. For next steps, I'll send a proposal and a draft insertion order by Friday covering the Southeast pilot: Create dynamic creative plus Activate local targeting, January 15th to April 15th.
+
+[00:28:40] Maya Thompson: Perfect. Please include an example of the franchisee approval workflow, that will help me sell it internally.
+
+[00:29:05] Ken Adeyemi: And net 30 payment terms, please.
+
+[00:29:20] Daniel Reyes: Will do. Thank you both.
