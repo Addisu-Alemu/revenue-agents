@@ -1,0 +1,17 @@
+[project]
+name = "revenue-agents"
+version = "0.1.0"
+description = "Agentic revenue system for Cool AI: agents that run the sales lifecycle from prospect to signed IO."
+requires-python = ">=3.10"
+dependencies = [
+    "claude-agent-sdk",
+    "pyyaml",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
