@@ -17,6 +17,7 @@ from revenue_agents.agents.reply_triage import ReplyTriageAgent
 from revenue_agents.agents.research import ResearchAgent
 from revenue_agents.agents.scoring import ScoringAgent
 from revenue_agents.crm import MockHubSpot
+from revenue_agents.demo_llm import demo_llm
 from revenue_agents.guardrails.approvals import ApprovalQueue
 from revenue_agents.guardrails.audit import AuditLog
 from revenue_agents.guardrails.claims import ActionClaims
@@ -25,7 +26,7 @@ from revenue_agents.guardrails.kill_switch import KillSwitch
 from revenue_agents.guardrails.policy import AutonomyPolicy
 from revenue_agents.handlers import ActionHandlers
 from revenue_agents.lessons import LessonStore
-from revenue_agents.llm import LLM
+from revenue_agents.llm import LLM, ClaudeLLM
 from revenue_agents.orchestrator import Agents, Orchestrator
 from revenue_agents.segments import SEGMENTS_DIR, SegmentRegistry
 from revenue_agents.skills.enrichment import JsonEnricher
@@ -68,3 +69,15 @@ def build_system(llm: LLM, state_dir: Path = STATE_DIR, segments_dir: Path = SEG
     orchestrator = Orchestrator(crm, lessons, gateway, approvals, audit, segments, agents,
                                 ActionClaims(state_dir / "events"))
     return System(crm, lessons, approvals, audit, kill_switch, segments, gateway, orchestrator)
+
+
+def make_llm(mode: str) -> LLM:
+    """`claude`: the real model (needs ANTHROPIC_API_KEY with credit). `fake`: scripted demo answers.
+
+    There is no silent fallback: if `claude` is chosen and fails, the run fails.
+    """
+    if mode == "claude":
+        return ClaudeLLM()
+    if mode == "fake":
+        return demo_llm()
+    raise ValueError(f"unknown LLM mode '{mode}': use 'fake' or 'claude'")
