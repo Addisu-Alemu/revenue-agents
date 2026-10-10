@@ -21,10 +21,16 @@ def test_brand_demo_runs_end_to_end(tmp_path):
     assert "APPROVAL NEEDED: First email to Maya Thompson" in output
     assert "Already handled: ignored" in output  # duplicate webhook
     assert "Stage proposal -> signature" in output
+    assert "Rejected: unknown envelope 'ENV-FAKE-001'" in output
+    assert "Stage signature -> handoff" in output
+    assert "Handoff to delivery:" in output
     assert "Lessons used: lesson:L-001_discovery_call:0" in output
     assert "Suspicious content: ignored as instructions" in output
     assert "Tier C: no outreach, left for nurture" in output
     assert "used in: D-002" in output
+    assert "6 days later" in output
+    assert "Follow up with Owen Castillo: no progress in replied" in output
+    assert "Daily digest" in output
     assert "approvals pending: 0" in output
 
 
@@ -65,3 +71,13 @@ def test_make_llm_modes():
     assert isinstance(make_llm("claude"), ClaudeLLM)
     with pytest.raises(ValueError, match="use 'fake' or 'claude'"):
         make_llm("gpt")
+
+
+def test_rejecting_the_io_means_nothing_to_sign(tmp_path):
+    answers = iter(["y", "n"] + ["y"] * 10)  # approve Maya's email, reject the IO
+    code, output = demo(tmp_path, ask=lambda prompt: next(answers))
+
+    assert code == 0
+    assert "Rejected by demo-reviewer@cool.example: send_io:D-001:IO-D-001" in output
+    assert "E-signature webhook" not in output
+    assert "D-001  BrightBite Burgers     A       97  proposal" in output

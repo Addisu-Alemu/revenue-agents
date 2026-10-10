@@ -4,7 +4,8 @@ This is the only code with side effects, and it only runs after the policy
 said yes (or a human approved). Handlers record facts in the CRM and lesson
 store. Deciding what happens next (stage changes) is the orchestrator's job.
 
-Sending is mocked: an "email_sent" activity on the deal timeline is the outbox.
+Sending is mocked: an "email_sent" activity on the deal timeline is the outbox,
+and IOs go to a mock e-signature provider.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from revenue_agents.crm import CRM
+from revenue_agents.esign import ESignProvider
 from revenue_agents.guardrails.gateway import Handler
 from revenue_agents.guardrails.policy import Action, ActionType
 from revenue_agents.lessons import LessonStore
@@ -19,9 +21,10 @@ from revenue_agents.models import DealFields, Enrichment, LeadScore, Lesson
 
 
 class ActionHandlers:
-    def __init__(self, crm: CRM, lessons: LessonStore) -> None:
+    def __init__(self, crm: CRM, lessons: LessonStore, esign: ESignProvider) -> None:
         self._crm = crm
         self._lessons = lessons
+        self._esign = esign
 
     def as_dict(self) -> dict[ActionType, Handler]:
         return {
@@ -34,6 +37,7 @@ class ActionHandlers:
             ActionType.SEND_EMAIL: self.send_email,
             ActionType.DRAFT_IO: self.draft_io,
             ActionType.SEND_IO: self.send_io,
+            ActionType.CLOSE_DEAL: self.close_deal,
         }
 
     def enrich_lead(self, action: Action) -> None:
@@ -85,9 +89,25 @@ class ActionHandlers:
                       {"io_number": action.payload["io_number"], "document": action.payload["document"]})
 
     def send_io(self, action: Action) -> dict[str, str]:
-        self._crm.log(action.deal_id, "io_sent", action.summary,
-                      {"io_number": action.payload["io_number"], "to": action.payload["to"]})
-        return {"status": "sent for review (mock)", "io_number": action.payload["io_number"]}
+        """Send the IO for e-signature. The envelope id ties the later "signed" webhook to this deal."""
+        payload = action.payload
+        envelope = self._esign.send(action.deal_id, payload["io_number"], payload["document"], payload["to"])
+        self._crm.log(action.deal_id, "io_sent", f"{action.summary} for e-signature ({envelope.id})",
+                      {"io_number": payload["io_number"], "to": payload["to"], "envelope_id": envelope.id})
+        return {"status": "sent for e-signature (mock)", "envelope_id": envelope.id}
+
+    def close_deal(self, action: Action) -> None:
+        """Closed won: write the handoff note the delivery team starts from."""
+        deal = self._crm.get_deal(action.deal_id)
+        fields = deal.fields
+        handoff = {
+            "products": fields.products, "budget_usd": fields.budget_usd, "scope": fields.scope,
+            "flight_start": fields.flight_start.isoformat() if fields.flight_start else None,
+            "flight_end": fields.flight_end.isoformat() if fields.flight_end else None,
+            "signed_by": action.payload.get("signed_by"), "envelope_id": action.payload.get("envelope_id"),
+            "special_terms": fields.special_terms,
+        }
+        self._crm.log(deal.id, "handoff", action.summary, handoff)
 
 
 def _merge_flags(existing: list[str], new: list[str]) -> list[str]:

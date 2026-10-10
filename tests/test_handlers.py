@@ -11,6 +11,7 @@ from revenue_agents.agents.reply_triage import ReplyTriageAgent
 from revenue_agents.agents.research import ResearchAgent
 from revenue_agents.agents.scoring import ScoringAgent
 from revenue_agents.crm import MockHubSpot
+from revenue_agents.esign import MockESign
 from revenue_agents.guardrails.approvals import ApprovalQueue
 from revenue_agents.guardrails.audit import AuditLog
 from revenue_agents.guardrails.claims import ActionClaims
@@ -31,7 +32,7 @@ def system(tmp_path, segments):
     approvals = ApprovalQueue(tmp_path / "approvals.json")
     gateway = ActionGateway(
         AutonomyPolicy(segments, KillSwitch(tmp_path / "KILL_SWITCH")), approvals, AuditLog(tmp_path / "audit.jsonl"),
-        ActionHandlers(crm, lessons).as_dict(), ActionClaims(tmp_path / "claims"),
+        ActionHandlers(crm, lessons, MockESign(tmp_path / "esign.json")).as_dict(), ActionClaims(tmp_path / "claims"),
     )
     return crm, lessons, approvals, gateway
 
@@ -144,5 +145,6 @@ def test_io_draft_is_attached_and_sending_waits_for_approval(system, segments):
     assert [r.id for r in approvals.pending()] == ["send_io:D-001:IO-D-001"]
 
     approvals.approve("send_io:D-001:IO-D-001", reviewer="maria@cool.example")
-    assert gateway.execute_approved("send_io:D-001:IO-D-001", deal).result["io_number"] == "IO-D-001"
-    assert crm.timeline(deal.id)[-1].kind == "io_sent"
+    assert gateway.execute_approved("send_io:D-001:IO-D-001", deal).result["envelope_id"] == "ENV-IO-D-001"
+    sent = crm.timeline(deal.id)[-1]
+    assert (sent.kind, sent.data["envelope_id"]) == ("io_sent", "ENV-IO-D-001")

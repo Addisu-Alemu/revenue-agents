@@ -18,6 +18,7 @@ from revenue_agents.agents.research import ResearchAgent
 from revenue_agents.agents.scoring import ScoringAgent
 from revenue_agents.crm import MockHubSpot
 from revenue_agents.demo_llm import demo_llm
+from revenue_agents.esign import MockESign
 from revenue_agents.guardrails.approvals import ApprovalQueue
 from revenue_agents.guardrails.audit import AuditLog
 from revenue_agents.guardrails.claims import ActionClaims
@@ -31,11 +32,13 @@ from revenue_agents.orchestrator import Agents, Orchestrator
 from revenue_agents.segments import SEGMENTS_DIR, SegmentRegistry
 from revenue_agents.skills.enrichment import JsonEnricher
 from revenue_agents.storage import STATE_DIR
+from revenue_agents.tracking import Tracker
 
 
 @dataclass
 class System:
     crm: MockHubSpot
+    esign: MockESign
     lessons: LessonStore
     approvals: ApprovalQueue
     audit: AuditLog
@@ -53,10 +56,11 @@ def build_system(llm: LLM, state_dir: Path = STATE_DIR, segments_dir: Path = SEG
     approvals = ApprovalQueue(state_dir / "approvals.json")
     audit = AuditLog(state_dir / "audit.jsonl")
     kill_switch = KillSwitch(state_dir / "KILL_SWITCH")
+    esign = MockESign(state_dir / "esign.json")
 
+    claims = ActionClaims(state_dir / "claims")
     gateway = ActionGateway(
-        AutonomyPolicy(segments, kill_switch), approvals, audit,
-        ActionHandlers(crm, lessons).as_dict(), ActionClaims(state_dir / "claims"),
+        AutonomyPolicy(segments, kill_switch), approvals, audit, ActionHandlers(crm, lessons, esign).as_dict(), claims,
     )
     agents = Agents(
         research=ResearchAgent(JsonEnricher()),
@@ -66,9 +70,10 @@ def build_system(llm: LLM, state_dir: Path = STATE_DIR, segments_dir: Path = SEG
         call_intel=CallIntelAgent(llm, segments),
         deal_desk=DealDeskAgent(segments),
     )
+    tracker = Tracker(crm, approvals, lessons, segments, claims, state_dir / "digests")
     orchestrator = Orchestrator(crm, lessons, gateway, approvals, audit, segments, agents,
-                                ActionClaims(state_dir / "events"))
-    return System(crm, lessons, approvals, audit, kill_switch, segments, gateway, orchestrator)
+                                ActionClaims(state_dir / "events"), tracker, esign)
+    return System(crm, esign, lessons, approvals, audit, kill_switch, segments, gateway, orchestrator)
 
 
 def make_llm(mode: str) -> LLM:

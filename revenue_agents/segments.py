@@ -15,7 +15,7 @@ from pathlib import Path
 import yaml
 from pydantic import Field, ValidationError, field_validator, model_validator
 
-from revenue_agents.models import Engagement, Enrichment, Model, Tier
+from revenue_agents.models import Engagement, Enrichment, Model, Stage, Tier
 
 SEGMENTS_DIR = Path(__file__).resolve().parent.parent / "segments"
 SEGMENT_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
@@ -152,6 +152,31 @@ class AutonomyConfig(Model):
         return value
 
 
+# Days a deal may sit in a stage before it counts as stalled. A pack can override any of them.
+DEFAULT_STALL_DAYS = {
+    Stage.PROSPECT: 1, Stage.ENRICHED: 1, Stage.SCORED: 2, Stage.OUTREACH: 5, Stage.REPLIED: 3,
+    Stage.MEETING: 7, Stage.QUALIFIED: 3, Stage.PROPOSAL: 5, Stage.SIGNATURE: 7,
+}
+
+
+class TrackingConfig(Model):
+    stall_days: dict[Stage, int] = Field(default_factory=dict)
+    approval_reminder_hours: int = Field(default=24, gt=0)
+
+    @field_validator("stall_days")
+    @classmethod
+    def positive_days_for_open_stages(cls, value: dict[Stage, int]) -> dict[Stage, int]:
+        closed = {stage.value for stage in value if stage in (Stage.HANDOFF, Stage.CLOSED_LOST)}
+        if closed:
+            raise ValueError(f"closed stages can't stall: {sorted(closed)}")
+        if any(days <= 0 for days in value.values()):
+            raise ValueError("stall_days must be positive")
+        return value
+
+    def limit_for(self, stage: Stage) -> int | None:
+        return {**DEFAULT_STALL_DAYS, **self.stall_days}.get(stage)
+
+
 class SegmentPack(Model):
     """One segment's complete configuration."""
 
@@ -163,6 +188,7 @@ class SegmentPack(Model):
     messaging: Messaging
     templates: Templates
     autonomy: AutonomyConfig = Field(default_factory=AutonomyConfig)
+    tracking: TrackingConfig = Field(default_factory=TrackingConfig)
 
 
 # --- Loading ---------------------------------------------------------------

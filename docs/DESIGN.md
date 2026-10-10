@@ -147,9 +147,9 @@ Every trigger becomes an `Event` with an id from its source (webhook delivery id
 | Human approves / rejects | Approval queue (UI) | `approval.decided` | Gateway re-checks kill switch and scope, then executes | email sent → outreach; IO sent → signature |
 | Reply received | Email provider webhook | `reply.received` | Reply triage → flags | → replied → meeting (if requested) / closed_lost (unsubscribe) |
 | Transcript ready | Fireflies webhook | `call.completed` | Call intel → if proposal fields complete: Deal desk | → qualified → proposal (IO send waits) |
-| IO signed *(designed)* | E-sign webhook (DocuSign) | `signature.completed` | Close deal, hand off to delivery | → handoff |
-| SLA timer *(designed)* | Scheduler | `sla.check` | Stall detection: no stage change in N days → flag + reminder | — |
-| Daily digest *(designed)* | Scheduler (cron) | `digest.daily` | Summary of approvals waiting, stalled deals, flags | — |
+| IO signed | E-sign webhook (DocuSign) | `signature.completed` | Verify envelope with the provider → close won → handoff note | → handoff |
+| SLA timer | Scheduler (e.g. every morning) | `sla.check` | Stall detection: days in stage > the pack's `tracking.stall_days` → `stalled_<stage>` flag + reminder on the timeline (once per deal and stage) | — |
+| Daily digest | Scheduler (cron) | `digest.daily` | Pipeline by stage, approvals waiting (overdue after the pack's `approval_reminder_hours`), stalled deals, deals needing attention, today's lessons, **stuck actions** (claims that never completed) | — |
 
 **Stage exit criteria** (`stages.py`) are checked before every transition, and deals move forward only:
 
@@ -162,6 +162,27 @@ Every trigger becomes an `Event` with an id from its source (webhook delivery id
 | proposal / signature / handoff | IO drafted / IO sent / IO signed |
 
 When criteria aren't met, the deal stays put and the missing items are logged on its timeline ("Stays in meeting: qualified needs budget_usd").
+
+**IO / contract automation** (end to end in the slice):
+
+```mermaid
+flowchart LR
+    C[call.completed] --> Q{proposal fields<br/>complete?}
+    Q -->|no| F[flag missing_*, stay]
+    Q -->|yes| G[Deal desk: generate IO<br/>from validated fields]
+    G --> V{valid? no blanks,<br/>catalogue products,<br/>dates in order}
+    V -->|no| B[flag io_blocked + gaps]
+    V -->|yes| D[draft_io: auto] --> S[send_io: human approval]
+    S --> E[e-sign envelope]
+    E --> W[signature.completed webhook]
+    W --> X{provider confirms signed,<br/>envelope matches deal<br/>at signature stage?}
+    X -->|no| R[reject / flag]
+    X -->|yes| H[close_deal: closed won → handoff note]
+```
+
+The orchestrator never trusts the webhook body: it **looks the envelope up with the provider**, requires status `signed`, and requires that the envelope is the one this deal sent and that the deal is at `signature`. A forged webhook for an unknown envelope is rejected and audited; a premature or mismatched one flags the deal (`signature_unconfirmed`, `signature_mismatch`). In production the webhook's HMAC signature would also be verified. `send_for_signature` is reserved for a flow where the IO is reviewed by the customer before signing; in the slice, `send_io` sends straight to e-signature.
+
+**Tracking** (`tracking.py`). Stall limits are per stage and per segment (`tracking.stall_days`, with defaults in code), so "stalled" can mean different things for brands and agencies without code changes. Deals parked on purpose (Tier C in nurture) and closed deals never raise stall alerts, to avoid alert fatigue. Scheduled events use the date as their id (`digest:2026-10-16`), so a scheduler firing twice produces one digest. The digest is saved as JSON for the UI and lists stuck action claims, which is where the gateway's at-most-once trade-off surfaces to a human.
 
 **Production durability.** The slice processes events synchronously from files. In production the same handlers would sit behind a durable queue (e.g. SQS or Pub/Sub with a dead-letter queue) or a workflow engine (Temporal) for retries with backoff and timers. The event-id claim moves to a database unique constraint. Handler code doesn't change.
 

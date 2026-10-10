@@ -100,3 +100,14 @@ templates:
 # Tier A always does (enforced in code). A pack can add tiers, never remove A.
 autonomy:
   first_touch_approval_tiers: [A]
+
+# Tracking: days a deal may sit in a stage before it's flagged as stalled and a
+# reminder goes to the rep. Stages not listed use the defaults in code.
+tracking:
+  stall_days:
+    outreach: 5
+    replied: 3
+    meeting: 7
+    proposal: 5
+    signature: 7
+  approval_reminder_hours: 24
