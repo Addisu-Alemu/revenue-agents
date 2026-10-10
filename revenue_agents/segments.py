@@ -9,6 +9,7 @@ YAML file and no code.
 from __future__ import annotations
 
 import re
+import string
 from pathlib import Path
 
 import yaml
@@ -103,9 +104,37 @@ class Messaging(Model):
     avoid_phrases: list[str] = Field(default_factory=list)
 
 
+SUBJECT_PLACEHOLDERS = frozenset({"company", "first_name"})
+BODY_PLACEHOLDERS = frozenset({"company", "first_name", "opening", "value_prop", "call_to_action", "sender_name"})
+
+
+def _placeholders(template: str) -> set[str]:
+    try:
+        return {name for _, name, _, _ in string.Formatter().parse(template) if name is not None}
+    except ValueError as error:  # e.g. an unclosed "{"
+        raise ValueError(f"template is malformed: {error}") from error
+
+
 class Templates(Model):
     first_touch_subject: str
     first_touch_body: str
+
+    @field_validator("first_touch_subject")
+    @classmethod
+    def subject_placeholders_known(cls, value: str) -> str:
+        return _check_placeholders(value, SUBJECT_PLACEHOLDERS)
+
+    @field_validator("first_touch_body")
+    @classmethod
+    def body_placeholders_known(cls, value: str) -> str:
+        return _check_placeholders(value, BODY_PLACEHOLDERS)
+
+
+def _check_placeholders(template: str, allowed: frozenset[str]) -> str:
+    unknown = _placeholders(template) - allowed
+    if unknown:
+        raise ValueError(f"unknown placeholders {sorted(unknown)}. Allowed: {sorted(allowed)}")
+    return template
 
 
 class AutonomyConfig(Model):

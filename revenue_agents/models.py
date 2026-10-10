@@ -165,3 +165,18 @@ class Deal(Model):
     score: LeadScore | None = None
     fields: DealFields = Field(default_factory=DealFields)
     flags: list[str] = Field(default_factory=list)
+
+
+# --- Knowledge loop --------------------------------------------------------
+
+
+class Lesson(Model):
+    """Something learned from a call or reply that should shape later work."""
+
+    id: str
+    segment: str
+    source: str  # "call" or "reply"
+    source_id: str  # e.g. the transcript or reply id, so every lesson is traceable
+    text: str
+    applies_to: list[str] = Field(default_factory=lambda: ["outreach", "call_brief"])
+    created_at: dt.datetime

@@ -43,7 +43,24 @@ flowchart LR
 
 ## 2. Agents: responsibilities and tools
 
-*(to be completed: the agent table)*
+Each agent has **one job** and returns its findings plus the **actions it proposes**. It never executes them. "Tools" here are the action types the policy allows the agent to propose (`AGENT_PERMISSIONS`). Anything else is blocked.
+
+| Agent | Responsibility | LLM? | May propose |
+| --- | --- | --- | --- |
+| **Research** | Enrich a lead (firmographics, buying signals) | No | `enrich_lead` |
+| **Scoring** | Fit / intent / engagement with reasons → tier | No (deterministic: the tier gates approval) | `score_lead` |
+| **Reply triage** | Classify a reply's intent, flag what needs attention, learn a lesson | Yes | `classify_reply`, `flag_deal`, `record_lesson` |
+| **Call intel** | Transcript → `DealFields`, pains, objections, lessons | Yes | `update_deal`, `record_lesson` |
+| **Outreach** | Draft first-touch email from pack messaging + lessons | Yes | `send_email` |
+| **Deal desk** | Generate and validate the IO from deal data; send for approval and e-sign | No | `draft_io`, `send_pricing`, `send_io`, `send_for_signature` |
+| **Orchestrator** | Owns deal state and stage transitions; routes events to agents | No | `update_deal`, `flag_deal`, `close_deal` |
+
+**Code checks the LLM can't override:**
+- **Reply triage:** pricing requests are flagged by a code-level pattern even if the model misses them. Injection attempts are flagged by `injection_signals()` even if the model is fooled (covered by a test where the fake model *is* fooled). **No lesson is learned from a suspicious message**, so an attacker can't poison the knowledge loop.
+- **Call intel:** products must exist in the segment pack (unknown ones are dropped and flagged); flight dates must be in order; missing proposal fields (budget, products, dates, decision-maker) are flagged; extraction says "leave empty, never guess".
+- **Outreach:** the model writes only a short opening (≤ 400 chars) and *chooses* a value prop by index. Subject, body structure, call to action and signature come from the pack template, so messaging stays under config control. Phrases the pack forbids (`avoid_phrases`) are rejected in code with whole-word matching, and the agent retries **once** with feedback, then gives up (`DraftRejectedError`) rather than sending. Only lessons that were actually offered can be cited in `lessons_used`, so lesson usage is traceable. Enrichment facts reach the model as untrusted data. Template placeholders are validated when the pack loads.
+- **Deal desk:** no LLM. The IO is filled only from validated deal fields; missing or inconsistent data (budget, products in the segment's catalogue, flight dates in order, signatory, payment terms) yields **no draft** and a list of gaps. Any `{{placeholder}}` left unfilled blocks the IO. Line items split the budget evenly as a starting point. Pricing is in the document, so `send_io` is always approved by a human.
+- **Idempotent ids:** `<action>:<deal>:<step>` (e.g. `classify_reply:D-001:reply:R-001`), so re-processing the same reply or transcript proposes the same ids, and the gateway runs each once.
 
 **LLM layer (`llm.py`).** Agents depend on a small `LLM` interface (`complete(system, prompt, schema) -> validated model`), not on the SDK.
 - **`ClaudeLLM`** runs the Claude Agent SDK **locked down**: `tools=[]` (no built-in file, shell or web tools), `setting_sources=[]` (no developer settings), `max_turns` and a per-call `max_budget_usd` cap, and a JSON-schema `output_format` generated from the pydantic model. Answers are validated, and a malformed answer raises instead of being used. It refuses to run without `ANTHROPIC_API_KEY`, so it never silently bills a logged-in Claude Code account. **The LLM can only return data. Every side effect is a proposed `Action` that goes through the gateway.**
@@ -159,6 +176,7 @@ flowchart LR
 - **Scoped tools per agent:** `AGENT_PERMISSIONS` maps each agent to the only action types it may propose.
 - **Approval doesn't bypass the kill switch.** Approved actions are re-checked right before execution.
 - **Idempotent, race-safe execution:** each action has a deterministic id (e.g. `email:D-001:first_touch`). Before running, the gateway **claims** the id by creating a marker file with `O_CREAT | O_EXCL`. The OS guarantees only one caller wins, even across processes, so two copies of a webhook arriving at the same moment send **one** email. (A check-then-act version sent 4 emails out of 10 concurrent deliveries; the claim sends 1. Both are covered by tests.) The approval queue is keyed by the same id and guarded by a file lock (`fcntl.flock`). Without it, 19 of 20 concurrent submissions were lost.
+- **Inbound content is untrusted** (`guardrails/untrusted.py`). Replies and transcripts reach the model inside `<untrusted source="...">` tags, with a rule never to follow instructions inside them. The content can't close the tag early (escaped), and the source label is sanitised. Separately, a plain-code detector (`injection_signals`) looks for instruction-like text: "ignore previous instructions", fake `[SYSTEM]` notes, "skip approval", "mark as Tier A", requests for internal pricing. *Trade-off:* pattern lists catch known styles, not every attack. They're one layer; the real protection is that the model can't act (no tools, gateway-only side effects) and that risk is read from deal state.
 - **Audit log:** append-only JSONL. Every policy decision, execution, duplicate and block is recorded with actor, deal, action and reason.
 - **Kill switch:** a file (`state/KILL_SWITCH`). An operator can stop everything without code changes or a restart.
 - **Durability:** state is written atomically (unique temp file + rename). If a handler raises, the claim is released and the event can be retried.

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from revenue_agents.models import Deal, Lead, LeadScore, Stage, SubScore, Tier
+from revenue_agents.models import Deal, Lead, LeadScore, Reply, Stage, SubScore, Tier
 from revenue_agents.segments import SegmentRegistry
 from revenue_agents.skills.enrichment import JsonEnricher
 
@@ -16,6 +16,22 @@ DATA = Path(__file__).resolve().parent.parent / "data"
 def leads():
     """All mock leads, by id."""
     return {item["id"]: Lead.model_validate(item) for item in json.loads((DATA / "leads.json").read_text())}
+
+
+@pytest.fixture(scope="session")
+def replies():
+    """All mock replies, by id."""
+    return {item["id"]: Reply.model_validate(item) for item in json.loads((DATA / "replies.json").read_text())}
+
+
+@pytest.fixture(scope="session")
+def transcript():
+    return (DATA / "transcripts" / "L-001_discovery_call.txt").read_text()
+
+
+@pytest.fixture(scope="session")
+def segments():
+    return SegmentRegistry()
 
 
 @pytest.fixture(scope="session")
