@@ -1,0 +1,104 @@
+# Segment config pack: Agencies (media, creative and programmatic agencies)
+#
+# Added without any agent code changes: agents and skills read this file
+# exactly like brand.yaml. Validated by revenue_agents/segments.py.
+
+segment: agency
+display_name: Agencies (media, creative and programmatic)
+
+icp_summary: >
+  Media and programmatic agencies managing 20+ clients and $10M+ in yearly
+  media spend, who need to produce and activate creative across many client
+  accounts without growing their teams.
+
+# Cool AI products that fit this segment (used for proposals and IO line items).
+products:
+  - "Create: Dynamic Creative Optimization"
+  - "Activate: Programmatic Media Activation"
+  - "Optimize: Cross-Client Measurement & Attribution"
+
+scoring:
+  # Agencies: engagement counts a bit more than for brands (they evaluate tools hands-on).
+  weights:
+    fit: 0.5
+    intent: 0.25
+    engagement: 0.25
+
+  tiers:
+    A: 70
+    B: 30
+
+  fit_rules:
+    - field: business_model
+      one_of: [agency]
+      points: 20
+      reason: Is an agency
+    - field: industry
+      contains_any: [media, programmatic]
+      points: 20
+      reason: Media or programmatic agency
+    - field: managed_clients
+      gte: 20
+      points: 25
+      reason: Manages 20+ client accounts
+    - field: managed_clients
+      gte: 10
+      points: 10
+      reason: Manages 10+ client accounts
+    - field: annual_ad_spend_usd
+      gte: 10000000
+      points: 25
+      reason: Manages $10M+ in media spend a year
+    - field: annual_ad_spend_usd
+      gte: 2000000
+      points: 15
+      reason: Manages $2M+ in media spend a year
+    - field: tech_stack
+      contains_any: [The Trade Desk, DV360, Amazon DSP]
+      points: 10
+      reason: Already runs programmatic buying
+
+  # Winning a new client is the strongest buying signal for an agency.
+  intent_points:
+    client_win: 35
+    hiring: 25
+    campaign: 25
+
+  engagement_points:
+    email_opens: 5
+    link_clicks: 10
+    website_visits: 5
+    pricing_page_visits: 15
+
+messaging:
+  tone: Direct and practical. Speak to agency economics (team time, margins, client retention). No hype.
+  value_props:
+    - Produce hundreds of creative variations per client without growing your studio team.
+    - Activate media for every client from one platform, with one workflow.
+    - Give each client attribution reports that prove your agency's impact.
+  call_to_action: a 20-minute walkthrough with your team
+  avoid_phrases:
+    - guarantee
+    - revolutionary
+    - cheapest
+    - discount
+  outreach_tiers: [A, B]
+
+templates:
+  first_touch_subject: Creative at scale across {company}'s clients
+  first_touch_body: |
+    Hi {first_name},
+
+    {opening}
+
+    {value_prop}
+
+    Would you be up for {call_to_action}?
+
+    Best,
+    {sender_name}
+
+# Stricter than brands: one agency can bring many client accounts, so first
+# contact with Tier B agencies also waits for a human. (Tier A must always be here.)
+autonomy:
+  first_touch_approval_tiers: [A, B]

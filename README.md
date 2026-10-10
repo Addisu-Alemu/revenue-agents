@@ -4,7 +4,7 @@ An agentic revenue system for Cool AI: single-purpose AI agents, coordinated by 
 
 Design: [docs/DESIGN.md](docs/DESIGN.md)
 
-> **Status: in progress.** Built so far: the full vertical slice for the brand segment: data models, segment config packs, enrichment and scoring, the autonomy policy (action gateway, approval queue, audit log, kill switch), the LLM layer, all six agents, mock HubSpot, the lesson store, the orchestrator with stage exit criteria, and the demo run. Next: a second segment (config only), tracking (stall detection, digests), e-signature and the UI.
+> **Status: in progress.** Built so far: the full vertical slice for the brand segment (data models, segment config packs, enrichment and scoring, the autonomy policy with action gateway, approval queue, audit log and kill switch, the LLM layer, all six agents, mock HubSpot, the lesson store, the orchestrator with stage exit criteria, and the demo run), plus a second segment, agencies, added through `segments/agency.yaml` alone. Next: tracking (stall detection, digests), e-signature and the UI.
 
 ## Setup
 
@@ -47,7 +47,7 @@ python scripts/check_claude.py
 python run_demo.py                  # fake model: scripted answers, no API key needed
 python run_demo.py --llm claude     # real Claude (needs ANTHROPIC_API_KEY with credit in .env)
 python run_demo.py --auto-approve   # don't pause at approvals
-python run_demo.py --segment agency # another segment (needs segments/agency.yaml)
+python run_demo.py --segment agency # the agency segment (added with config only)
 ```
 
 The demo runs the brand segment's mock data through the real system: a new lead is enriched, scored and tiered; the Tier A first email **pauses for your approval**; Maya's reply moves the deal to a meeting (and a duplicate webhook is ignored); the call transcript fills the deal fields and produces lessons; the IO is drafted and **pauses for approval**; the next brand lead's email **cites the lesson** from the call; and Owen's prompt-injection reply is flagged. It ends with the pipeline, the knowledge loop and the audit log size.
@@ -102,7 +102,7 @@ state/               Runtime state (approvals, audit log, claims). Git-ignored.
 
 ## Adding a customer segment
 
-Add `segments/<name>.yaml` following [`segments/brand.yaml`](segments/brand.yaml). No code changes are needed. The pack is validated when it loads: weights must add up to 1, tier A must be above tier B, every rule must reference a real field, and Tier A first contact must stay in `autonomy.first_touch_approval_tiers`.
+Add `segments/<name>.yaml` following [`segments/brand.yaml`](segments/brand.yaml) or [`segments/agency.yaml`](segments/agency.yaml). No code changes are needed: the agency segment was added this way. The pack is validated when it loads: weights must add up to 1, tier A must be above tier B, every rule must reference a real field, and Tier A first contact must stay in `autonomy.first_touch_approval_tiers`.
 
 ## Kill switch
 
