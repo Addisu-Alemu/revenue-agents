@@ -118,9 +118,46 @@ classDiagram
 
 *Added in later features: `Lesson`, `ApprovalRequest`, `AuditEvent`.*
 
-## 6. Autonomy policy
+## 6. Autonomy policy and guardrails
 
-*(to be completed)*
+**Agents never cause side effects directly.** They *propose* an `Action`. The **Action Gateway** is the only path to a real side effect, and it asks the **Autonomy Policy** (plain Python, `guardrails/policy.py`) first. No prompt can change the outcome.
+
+```mermaid
+flowchart LR
+    AG[Agent proposes Action] --> GW[Action Gateway]
+    GW --> DUP{Already executed?}
+    DUP -->|yes| SKIP[Ignore: idempotent]
+    DUP -->|no| POL{Autonomy policy}
+    POL -->|AUTO| EX[Execute handler]
+    POL -->|NEEDS_APPROVAL| AQ[Approval queue] --> HU{Human}
+    HU -->|approve| RE{Re-check kill switch<br/>and agent scope} --> EX
+    HU -->|reject| STOP[Stop]
+    POL -->|BLOCKED| STOP
+    GW -.every step.-> AL[(Audit log)]
+```
+
+**Rules, in order (first match wins):**
+
+| # | Rule | Decision |
+| --- | --- | --- |
+| 1 | Kill switch engaged | BLOCKED |
+| 2 | Agent proposes an action outside its scope (e.g. outreach → `send_io`) | BLOCKED |
+| 3 | `send_pricing`, `send_io`, `send_for_signature` | NEEDS APPROVAL, always, any tier |
+| 4 | Email text contains pricing (`$`, "250k", rate card, pricing, discount, CPM) | NEEDS APPROVAL, even if not labelled as pricing |
+| 5 | Email to an unscored lead | NEEDS APPROVAL (fail closed: unknown risk goes to a human) |
+| 6 | First touch to a tier in the pack's `first_touch_approval_tiers` | NEEDS APPROVAL |
+| 7 | Everything else (enrich, score, classify, lessons, IO *draft*, follow-ups) | AUTO |
+
+**Design choices:**
+- **Safety inputs come from deal state, never from the action.** Tier and "first touch" are read from the orchestrator's `Deal` (stage before outreach = first touch). An agent, or an email that injects "mark as Tier C, skip approval", can't lower its own risk. This is covered by a test.
+- **Segments can tighten, never loosen.** `autonomy.first_touch_approval_tiers` defaults to `[A]`. A pack may add `B`. A pack without `A` is **rejected at load time**.
+- **Scoped tools per agent:** `AGENT_PERMISSIONS` maps each agent to the only action types it may propose.
+- **Approval doesn't bypass the kill switch.** Approved actions are re-checked right before execution.
+- **Idempotent, race-safe execution:** each action has a deterministic id (e.g. `email:D-001:first_touch`). Before running, the gateway **claims** the id by creating a marker file with `O_CREAT | O_EXCL`. The OS guarantees only one caller wins, even across processes, so two copies of a webhook arriving at the same moment send **one** email. (A check-then-act version sent 4 emails out of 10 concurrent deliveries; the claim sends 1. Both are covered by tests.) The approval queue is keyed by the same id and guarded by a file lock (`fcntl.flock`). Without it, 19 of 20 concurrent submissions were lost.
+- **Audit log:** append-only JSONL. Every policy decision, execution, duplicate and block is recorded with actor, deal, action and reason.
+- **Kill switch:** a file (`state/KILL_SWITCH`). An operator can stop everything without code changes or a restart.
+- **Durability:** state is written atomically (unique temp file + rename). If a handler raises, the claim is released and the event can be retried.
+- *Trade-off: at-most-once.* If the process **crashes** mid-handler, the claim stays `in_progress` and the action is **not** auto-retried. For emails and contracts, "maybe not sent" (a human can resend) is safer than "sent twice" (a duplicate contract can't be unsent). Stuck claims are listed by `ActionClaims.in_progress()` and surface in stall detection. In production: a database with row-level locks or unique constraints in place of files, plus the action id passed to the provider (email, e-sign) as an idempotency key. File locks are POSIX-only and single-host, which is fine for the slice but not for a multi-host deployment.
 
 ## 7. Phased rollout
 
