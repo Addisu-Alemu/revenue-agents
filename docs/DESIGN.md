@@ -89,6 +89,22 @@ Each pack (`segments/brand.yaml`) contains:
 
 **Packs are validated at load time** (`SegmentRegistry`), so a bad pack fails at startup with a clear message and never mid-deal. Checks: weights add up to 1; tier A > tier B; every rule references a real field and has exactly one check; engagement keys exist; the file name matches `segment:`; and segment names can't escape the folder, because the name comes from lead data. YAML is parsed with `safe_load`, so the file can't execute code.
 
+### Second segment: agencies, config only
+
+`segments/agency.yaml` was added with **no code changes**: `git diff --stat main -- revenue_agents/` is empty for that change. It differs from `brand.yaml` in every section:
+
+| | Brand | Agency |
+| --- | --- | --- |
+| Fit rules | locations, ad spend, franchise model | managed clients, media spend, media/programmatic agency |
+| Weights (fit / intent / engagement) | 0.5 / 0.3 / 0.2 | 0.5 / 0.25 / 0.25 |
+| Strongest signal | expansion | client win |
+| Products | location targeting, location measurement | programmatic activation, cross-client attribution |
+| First-touch approval | Tier A | **Tier A and B** (tightened: one agency can bring many accounts) |
+
+Results on the mock data: Lumen 86.2 (A), Copperline 35 (B, still queued for approval under the agency rule), Solo Studio 10 (C, nurture). Sam's reply is flagged as an objection and a pricing request.
+
+*Trade-off:* lessons are scoped per segment, so agency outreach never sees brand lessons. Every segment gets its own knowledge loop, which avoids carrying franchise-specific advice into agency emails. A "global" scope for cross-segment lessons (e.g. objection handling) would be a small extension of `Lesson.segment`.
+
 ### Core skills
 
 Skills are reusable, segment-agnostic functions that agents call. Deterministic skills are plain Python and need no LLM.

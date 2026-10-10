@@ -47,9 +47,9 @@ def test_demo_starts_fresh_each_time(tmp_path):
 
 
 def test_unknown_segment_fails_with_a_clear_message(tmp_path):
-    code, output = demo(tmp_path, segment="agency", auto_approve=True)
+    code, output = demo(tmp_path, segment="publisher", auto_approve=True)
     assert code == 1
-    assert "no config pack for segment 'agency'. Available: brand" in output
+    assert "no config pack for segment 'publisher'. Available: agency, brand" in output
 
 
 def test_claude_mode_without_key_fails_instead_of_faking(tmp_path, monkeypatch):
