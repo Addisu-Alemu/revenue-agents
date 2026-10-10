@@ -98,7 +98,23 @@ Skills are reusable, segment-agnostic functions that agents call. Deterministic 
 | **Enrichment** (`skills/enrichment.py`) | Looks up firmographics and buying signals by domain. Agents depend on the `Enricher` interface, so the mock JSON provider swaps for Clearbit, Apollo or ZoomInfo without touching agents. | No |
 | **Scoring** (`skills/scoring.py`) | Fit = sum of matched pack rules. Intent = points per signal type. Engagement = points per interaction. Each is capped at 100 and **comes with a reason listing what matched and what was missed**. Total = weighted sum. Tier = pack cut-offs. | No: the tier gates human approval, so it must be deterministic and testable |
 
-*(to be completed: templating, reply classification, transcript extraction, IO generation, lesson retrieval)*
+| **Lesson store** (`lessons.py`) | Saves lessons idempotently; returns the newest for a segment and purpose; records every use | No |
+| **Action handlers** (`handlers.py`) | The only code with side effects, run by the gateway after the policy allows it: save enrichment and score, merge deal fields (empty values never erase known facts), add flags (deduplicated), save lessons, "send" email to the mock outbox, attach the IO | No |
+
+### Knowledge loop
+
+```mermaid
+flowchart LR
+    T[Call transcript] --> CI[Call intel agent]
+    R[Reply] --> RT[Reply triage agent]
+    CI -->|record_lesson| LS[(Lesson store)]
+    RT -->|record_lesson<br/>not from suspicious messages| LS
+    LS -->|newest lessons for segment| OA[Outreach agent]
+    OA -->|email cites lessons_used| GW[Gateway] --> H[send_email handler]
+    H -->|record_use| LS
+```
+
+Each lesson records **where it came from** (call or reply id) and each use records **where it went** (the email action), so a lesson can be traced from the call where it was learned to every email it shaped. Lessons are scoped by segment and purpose (`outreach`, `call_brief`). Suspicious messages never produce lessons.
 
 **Example output** (BrightBite, Tier A, total 97):
 > **Fit 100:** Matched: Franchise or multi-location business (+30); 50+ locations that need local ads (+25); Spends $1M+ a year on ads (+25); Already buys programmatic media (+10); Large enough team to run a pilot (+10).
@@ -138,7 +154,12 @@ classDiagram
 | `Reply` | Inbound email. The body is **untrusted content** and is never treated as instructions |
 | `Stage` | `prospect → enriched → scored → outreach → replied → meeting → qualified → proposal → signature → handoff` (or `closed_lost`) |
 
-*Added in later features: `Lesson`, `ApprovalRequest`, `AuditEvent`.*
+| `Lesson` | A reusable insight from a call or reply: segment, **source** (call/reply + id, so every lesson is traceable), text, and what it applies to (`outreach`, `call_brief`) |
+| `LessonUse` | Which action used which lesson on which deal: the "visibly used" half of the knowledge loop |
+| `Activity` | One entry on a deal's timeline (HubSpot engagement): email sent, reply, flag, document, note |
+| `Action`, `ApprovalRequest`, `AuditEvent` | A proposed side effect, its approval record, and the audit trail (section 6) |
+
+**System of record.** `CRM` is an interface; `MockHubSpot` implements it on a locked, atomically written JSON file seeded from the mock leads. Deals are created idempotently per lead (`L-001 → D-001`). A real HubSpot client would implement the same interface (deals ↔ HubSpot deals, `Activity` ↔ engagements, flags ↔ deal properties).
 
 ## 6. Autonomy policy and guardrails
 

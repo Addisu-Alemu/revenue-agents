@@ -4,7 +4,7 @@ An agentic revenue system for Cool AI: single-purpose AI agents, coordinated by 
 
 Design: [docs/DESIGN.md](docs/DESIGN.md)
 
-> **Status: in progress.** Built so far: data models, segment config packs, enrichment and scoring, the autonomy policy (action gateway, approval queue, audit log, kill switch) and the LLM layer. The agents, orchestrator, demo run and UI come next.
+> **Status: in progress.** Built so far: data models, segment config packs, enrichment and scoring, the autonomy policy (action gateway, approval queue, audit log, kill switch), the LLM layer, all six agents, mock HubSpot, the lesson store and action handlers. The orchestrator, demo run and UI come next.
 
 ## Setup
 
@@ -57,6 +57,10 @@ revenue_agents/
   models.py          Shared data models: Lead, Deal, LeadScore, Stage, Tier, ...
   segments.py        Loads and validates segment config packs
   llm.py             LLM interface: ClaudeLLM (Agent SDK, locked down) and FakeLLM (tests)
+  crm.py             CRM interface + MockHubSpot (system of record: leads, deals, timeline)
+  lessons.py         Lesson store: knowledge loop memory, with usage tracking
+  handlers.py        What executed actions actually do (the only side-effecting code)
+  agents/            research, scoring, outreach, reply_triage, call_intel, deal_desk
   storage.py         Atomic, locked file storage for runtime state
   skills/
     enrichment.py    Enricher interface + mock provider
@@ -67,6 +71,7 @@ revenue_agents/
     approvals.py     Approval queue for high-risk actions
     audit.py         Append-only audit log
     claims.py        Atomic per-action claims (idempotency)
+    untrusted.py     Wraps inbound content as data; detects prompt injection
     kill_switch.py   Emergency stop
 segments/            One YAML config pack per customer segment
 data/                Mock leads, enrichment, replies, call transcript, IO template
