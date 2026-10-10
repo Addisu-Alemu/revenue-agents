@@ -3,3 +3,4 @@ pyyaml
 pydantic
 pytest
 pytest-cov
+python-dotenv
