@@ -1,7 +1,7 @@
 """The live demo: one segment's leads, replies and calls, run through the real system.
 
 The story is driven by the data, not by segment-specific code:
-  1. the first lead that has a call transcript: lead -> its replies -> its call -> IO
+  1. the first lead that has a call transcript: lead -> its replies -> its call -> IO -> signature
   2. every other lead in the segment, then their replies
   3. a few days later: the scheduled SLA check and daily digest
 So the lesson learned on the call is available when the later emails are drafted.
@@ -81,6 +81,7 @@ class _Demo:
             for reply in (r for r in replies if r.lead_id == first.id):
                 self.reply(reply, show_duplicate=True)
             self.call(first, transcripts[first.id])
+            self.signature(first)
 
         for lead in (lead for lead in leads if lead is not first):
             self.lead_created(lead)
@@ -135,6 +136,28 @@ class _Demo:
         self.handle(Event(id=f"call:{transcript.stem}", type=EventType.CALL_COMPLETED,
                           payload={"lead_id": lead.id, "transcript_id": transcript.stem,
                                    "transcript": transcript.read_text()}))
+
+    def signature(self, lead: Lead) -> None:
+        deal = self.system.crm.deal_for_lead(lead.id)
+        sent = [a for a in self.system.crm.timeline(deal.id) if a.kind == "io_sent"]
+        if not sent:
+            return
+        envelope_id = sent[-1].data["envelope_id"]
+        signer = (deal.fields.decision_maker or lead.contact.name).split(" (")[0]
+
+        self.header(f"E-signature webhook: someone claims IO {envelope_id} is signed")
+        self.out("  A forged webhook arrives first, for an envelope we never sent:")
+        self.handle(Event(id="esign:ENV-FAKE-001", type=EventType.SIGNATURE_COMPLETED,
+                          payload={"envelope_id": "ENV-FAKE-001"}))
+        self.out(f"  Then {signer} really signs in the e-sign tool, and its webhook arrives:")
+        self.system.esign.sign(envelope_id, signed_by=signer)  # what DocuSign would record
+        self.handle(Event(id=f"esign:{envelope_id}", type=EventType.SIGNATURE_COMPLETED,
+                          payload={"envelope_id": envelope_id}))
+        handoff = [a for a in self.system.crm.timeline(deal.id) if a.kind == "handoff"]
+        if handoff:
+            data = handoff[-1].data
+            self.out(f"  Handoff to delivery: {', '.join(data['products'])}; ${data['budget_usd']:,}; "
+                     f"{data['flight_start']} to {data['flight_end']}")
 
     # --- Helpers -----------------------------------------------------------------
 

@@ -4,7 +4,7 @@ An agentic revenue system for Cool AI: single-purpose AI agents, coordinated by 
 
 Design: [docs/DESIGN.md](docs/DESIGN.md)
 
-> **Status: in progress.** Built so far: the full vertical slice for the brand segment (data models, segment config packs, enrichment and scoring, the autonomy policy with action gateway, approval queue, audit log and kill switch, the LLM layer, all six agents, mock HubSpot, the lesson store, the orchestrator with stage exit criteria, and the demo run), plus a second segment, agencies, added through `segments/agency.yaml` alone. Next: tracking (stall detection, digests), e-signature and the UI.
+> **Status: in progress.** Built so far: the full vertical slice for the brand segment (data models, segment config packs, enrichment and scoring, the autonomy policy with action gateway, approval queue, audit log and kill switch, the LLM layer, all six agents, mock HubSpot, the lesson store, the orchestrator with stage exit criteria, and the demo run), plus a second segment, agencies, added through `segments/agency.yaml` alone. It also covers tracking (stall detection, reminders, daily digest) and e-signature through to handoff. Next: the UI.
 
 ## Setup
 
@@ -50,7 +50,7 @@ python run_demo.py --auto-approve   # don't pause at approvals
 python run_demo.py --segment agency # the agency segment (added with config only)
 ```
 
-The demo runs the brand segment's mock data through the real system: a new lead is enriched, scored and tiered; the Tier A first email **pauses for your approval**; Maya's reply moves the deal to a meeting (and a duplicate webhook is ignored); the call transcript fills the deal fields and produces lessons; the IO is drafted and **pauses for approval**; the next brand lead's email **cites the lesson** from the call; and Owen's prompt-injection reply is flagged. It ends with the pipeline, the knowledge loop and the audit log size.
+The demo runs the brand segment's mock data through the real system: a new lead is enriched, scored and tiered; the Tier A first email **pauses for your approval**; Maya's reply moves the deal to a meeting (and a duplicate webhook is ignored); the call transcript fills the deal fields and produces lessons; the IO is drafted and **pauses for approval**, goes out for e-signature, a forged "signed" webhook is rejected and the real one closes the deal (handoff); the next brand lead's email **cites the lesson** from the call; Owen's prompt-injection reply is flagged; and six days later the SLA check flags a stalled deal and the daily digest prints. It ends with the pipeline, the knowledge loop and the audit log size.
 
 In fake mode, model answers are scripted for the mock data (and the demo says so); everything else is the real code path. `--llm claude` never falls back to fake: if the key is missing or has no credit, it stops with an error. Demo state is written to `state/demo/` and reset on each run (`--keep-state` to keep it).
 
@@ -78,6 +78,8 @@ revenue_agents/
   stages.py          Stage order and exit criteria
   events.py          Event types (triggers)
   system.py          Composition root: build_system() and make_llm()
+  tracking.py        Stall detection, reminders, daily digest
+  esign.py           E-signature interface + mock provider
   demo.py            The live demo story; demo_llm.py holds the scripted model answers
   storage.py         Atomic, locked file storage for runtime state
   skills/

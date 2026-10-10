@@ -10,6 +10,7 @@ so a retry can run.
     approval.decided -> execute or drop the approved/rejected action
     reply.received   -> reply triage -> flags (meeting / pricing / injection / unsubscribe)
     call.completed   -> call intel -> qualified? -> deal desk drafts IO (sending waits for approval)
+    signature.completed -> verify the envelope with the e-sign provider -> close won -> handoff
     sla.check        -> flag stalled deals and remind the rep (once per deal and stage)
     digest.daily     -> summary: approvals waiting, stalled and flagged deals, new lessons, stuck actions
 """
@@ -27,6 +28,7 @@ from revenue_agents.agents.reply_triage import ReplyTriageAgent
 from revenue_agents.agents.research import ResearchAgent
 from revenue_agents.agents.scoring import ScoringAgent
 from revenue_agents.crm import CRM
+from revenue_agents.esign import EnvelopeStatus, ESignProvider
 from revenue_agents.events import Event, EventType
 from revenue_agents.guardrails.approvals import ApprovalQueue
 from revenue_agents.guardrails.audit import AuditLog
@@ -42,7 +44,7 @@ from revenue_agents.tracking import Tracker
 
 # Executing these actions is the evidence for the next stage.
 STAGE_AFTER = {ActionType.SEND_EMAIL: Stage.OUTREACH, ActionType.DRAFT_IO: Stage.PROPOSAL,
-               ActionType.SEND_IO: Stage.SIGNATURE}
+               ActionType.SEND_IO: Stage.SIGNATURE, ActionType.CLOSE_DEAL: Stage.HANDOFF}
 
 
 @dataclass
@@ -68,7 +70,7 @@ class Orchestrator:
 
     def __init__(self, crm: CRM, lessons: LessonStore, gateway: ActionGateway, approvals: ApprovalQueue,
                  audit: AuditLog, segments: SegmentRegistry, agents: Agents, events: ActionClaims,
-                 tracker: Tracker) -> None:
+                 tracker: Tracker, esign: ESignProvider) -> None:
         self._crm = crm
         self._lessons = lessons
         self._gateway = gateway
@@ -78,11 +80,13 @@ class Orchestrator:
         self._agents = agents
         self._events = events
         self._tracker = tracker
+        self._esign = esign
         self._handlers = {
             EventType.LEAD_CREATED: self._on_lead_created,
             EventType.APPROVAL_DECIDED: self._on_approval,
             EventType.REPLY_RECEIVED: self._on_reply,
             EventType.CALL_COMPLETED: self._on_call,
+            EventType.SIGNATURE_COMPLETED: self._on_signature,
             EventType.SLA_CHECK: self._on_sla_check,
             EventType.DIGEST_DAILY: self._on_digest,
         }
@@ -188,6 +192,31 @@ class Orchestrator:
         if io.output.errors:
             return steps + self._flag(deal, "io_blocked", "; ".join(io.output.errors))
         return steps + self._submit(io.actions)
+
+    def _on_signature(self, event: Event) -> list[str]:
+        """Close the deal only if the provider confirms a signed envelope that this deal is waiting for."""
+        envelope_id = event.payload.get("envelope_id", "")
+        try:
+            envelope = self._esign.get(envelope_id)  # ask the provider; don't trust the webhook body
+        except KeyError:
+            self._audit.record(self.name, "signature_rejected", action_id=event.id,
+                               detail=f"unknown envelope {envelope_id!r}")
+            return [f"Rejected: unknown envelope {envelope_id!r} (forged or misrouted webhook)"]
+
+        deal = self._crm.get_deal(envelope.deal_id)
+        sent = [a for a in self._crm.timeline(deal.id) if a.kind == "io_sent" and a.data.get("envelope_id") == envelope.id]
+        if envelope.status is not EnvelopeStatus.SIGNED:
+            return self._flag(deal, "signature_unconfirmed", f"provider says {envelope.id} is {envelope.status.value}")
+        if not sent or deal.stage is not Stage.SIGNATURE:
+            return self._flag(deal, "signature_mismatch", f"{envelope.id} doesn't match a pending signature")
+
+        self._crm.log(deal.id, "signed", f"{envelope.io_number} signed by {envelope.signed_by}",
+                      {"envelope_id": envelope.id, "signed_by": envelope.signed_by})
+        steps = [f"{envelope.io_number} signed by {envelope.signed_by} (verified with the e-sign provider)"]
+        close = Action(id=f"close_deal:{deal.id}:won", type=ActionType.CLOSE_DEAL, agent=self.name, deal_id=deal.id,
+                       summary=f"Closed won: {envelope.io_number}, handoff to delivery",
+                       payload={"signed_by": envelope.signed_by, "envelope_id": envelope.id})
+        return steps + self._submit([close])
 
     def _on_sla_check(self, event: Event) -> list[str]:
         stalled = self._tracker.stalled(event.now)
