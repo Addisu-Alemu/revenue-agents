@@ -7,6 +7,7 @@ dependencies = [
     "claude-agent-sdk",
     "pyyaml",
     "pydantic>=2",
+    "python-dotenv",
 ]
 
 [project.optional-dependencies]

@@ -43,7 +43,12 @@ flowchart LR
 
 ## 2. Agents: responsibilities and tools
 
-*(to be completed)*
+*(to be completed: the agent table)*
+
+**LLM layer (`llm.py`).** Agents depend on a small `LLM` interface (`complete(system, prompt, schema) -> validated model`), not on the SDK.
+- **`ClaudeLLM`** runs the Claude Agent SDK **locked down**: `tools=[]` (no built-in file, shell or web tools), `setting_sources=[]` (no developer settings), `max_turns` and a per-call `max_budget_usd` cap, and a JSON-schema `output_format` generated from the pydantic model. Answers are validated, and a malformed answer raises instead of being used. It refuses to run without `ANTHROPIC_API_KEY`, so it never silently bills a logged-in Claude Code account. **The LLM can only return data. Every side effect is a proposed `Action` that goes through the gateway.**
+- **`FakeLLM`** returns scripted answers per schema and records every prompt. Tests are offline, free and deterministic, and can assert *what was sent to the model* (e.g. that lessons were included, or that inbound email was wrapped as untrusted).
+- **The model is per instance.** Each agent can use the model its job needs (e.g. a cheaper model for classification) via configuration. The default is `claude-opus-5-5`.
 
 ## 3. Skills and segment packs
 
