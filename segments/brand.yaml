@@ -73,6 +73,8 @@ messaging:
     - Franchisees can only change the fields corporate allows, with approval built in.
     - Target around each store and see results per location.
   call_to_action: a 30-minute call next week
+  # Tiers that get a first-touch email. Tier C goes to nurture instead.
+  outreach_tiers: [A, B]
   # Phrases outreach must never use. Enforced in code, not just in the prompt.
   avoid_phrases:
     - guarantee

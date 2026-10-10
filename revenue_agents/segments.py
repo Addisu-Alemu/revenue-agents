@@ -102,6 +102,8 @@ class Messaging(Model):
     value_props: list[str] = Field(min_length=1)
     call_to_action: str
     avoid_phrases: list[str] = Field(default_factory=list)
+    # Tiers that get a first-touch email. Others are left for nurture.
+    outreach_tiers: list[Tier] = Field(default_factory=lambda: [Tier.A, Tier.B])
 
 
 SUBJECT_PLACEHOLDERS = frozenset({"company", "first_name"})

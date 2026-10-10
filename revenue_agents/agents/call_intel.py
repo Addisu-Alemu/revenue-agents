@@ -15,10 +15,8 @@ from revenue_agents.guardrails.untrusted import UNTRUSTED_RULES, injection_signa
 from revenue_agents.llm import LLM
 from revenue_agents.models import Deal, DealFields, Lead, Lesson, Model
 from revenue_agents.segments import SegmentRegistry
+from revenue_agents.stages import PROPOSAL_FIELDS
 from revenue_agents.storage import utc_now
-
-# Fields a proposal / IO can't be drafted without.
-REQUIRED_FOR_PROPOSAL = ("budget_usd", "products", "flight_start", "flight_end", "decision_maker")
 
 SYSTEM_PROMPT = f"""You turn sales call transcripts into structured deal data for Cool AI, an AI advertising platform.
 
@@ -111,5 +109,5 @@ def _check(fields: DealFields, allowed_products: list[str]) -> tuple[DealFields,
         updates.update(flight_start=None, flight_end=None)
 
     checked = fields.model_copy(update=updates)
-    flags += [f"missing_{name}" for name in REQUIRED_FOR_PROPOSAL if not getattr(checked, name)]
+    flags += [f"missing_{name}" for name in PROPOSAL_FIELDS if not getattr(checked, name)]
     return checked, flags

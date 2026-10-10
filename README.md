@@ -4,7 +4,7 @@ An agentic revenue system for Cool AI: single-purpose AI agents, coordinated by 
 
 Design: [docs/DESIGN.md](docs/DESIGN.md)
 
-> **Status: in progress.** Built so far: data models, segment config packs, enrichment and scoring, the autonomy policy (action gateway, approval queue, audit log, kill switch), the LLM layer, all six agents, mock HubSpot, the lesson store and action handlers. The orchestrator, demo run and UI come next.
+> **Status: in progress.** Built so far: the full vertical slice for the brand segment: data models, segment config packs, enrichment and scoring, the autonomy policy (action gateway, approval queue, audit log, kill switch), the LLM layer, all six agents, mock HubSpot, the lesson store, the orchestrator with stage exit criteria, and the demo run. Next: a second segment (config only), tracking (stall detection, digests), e-signature and the UI.
 
 ## Setup
 
@@ -41,6 +41,19 @@ Check the connection (one tiny request, costs a fraction of a cent):
 python scripts/check_claude.py
 ```
 
+## Run the demo
+
+```bash
+python run_demo.py                  # fake model: scripted answers, no API key needed
+python run_demo.py --llm claude     # real Claude (needs ANTHROPIC_API_KEY with credit in .env)
+python run_demo.py --auto-approve   # don't pause at approvals
+python run_demo.py --segment agency # another segment (needs segments/agency.yaml)
+```
+
+The demo runs the brand segment's mock data through the real system: a new lead is enriched, scored and tiered; the Tier A first email **pauses for your approval**; Maya's reply moves the deal to a meeting (and a duplicate webhook is ignored); the call transcript fills the deal fields and produces lessons; the IO is drafted and **pauses for approval**; the next brand lead's email **cites the lesson** from the call; and Owen's prompt-injection reply is flagged. It ends with the pipeline, the knowledge loop and the audit log size.
+
+In fake mode, model answers are scripted for the mock data (and the demo says so); everything else is the real code path. `--llm claude` never falls back to fake: if the key is missing or has no credit, it stops with an error. Demo state is written to `state/demo/` and reset on each run (`--keep-state` to keep it).
+
 ## Tests
 
 ```bash
@@ -61,6 +74,11 @@ revenue_agents/
   lessons.py         Lesson store: knowledge loop memory, with usage tracking
   handlers.py        What executed actions actually do (the only side-effecting code)
   agents/            research, scoring, outreach, reply_triage, call_intel, deal_desk
+  orchestrator.py    Owns deal state; handles events; moves stages
+  stages.py          Stage order and exit criteria
+  events.py          Event types (triggers)
+  system.py          Composition root: build_system() and make_llm()
+  demo.py            The live demo story; demo_llm.py holds the scripted model answers
   storage.py         Atomic, locked file storage for runtime state
   skills/
     enrichment.py    Enricher interface + mock provider
@@ -75,7 +93,8 @@ revenue_agents/
     kill_switch.py   Emergency stop
 segments/            One YAML config pack per customer segment
 data/                Mock leads, enrichment, replies, call transcript, IO template
-scripts/             Entry-point scripts (e.g. check_claude.py)
+run_demo.py          Entry point for the live demo
+scripts/             Other entry points (check_claude.py)
 tests/
 docs/DESIGN.md
 state/               Runtime state (approvals, audit log, claims). Git-ignored.

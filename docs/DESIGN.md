@@ -123,7 +123,31 @@ Each lesson records **where it came from** (call or reply id) and each use recor
 
 ## 4. Trigger map
 
-*(to be completed)*
+Every trigger becomes an `Event` with an id from its source (webhook delivery id, reply id, transcript id). The orchestrator **claims the event id atomically** before processing, so at-least-once delivery (lost acks, crashes, replays, double clicks) results in exactly one processing. A failed handler releases the claim so the source's retry can run.
+
+| Trigger | Source (production) | Event | Orchestrator runs | Exit → stage |
+| --- | --- | --- | --- | --- |
+| New contact / form fill | HubSpot webhook | `lead.created` | Research → Scoring → Outreach (if tier in pack's `outreach_tiers`) | → enriched → scored → outreach (Tier A waits) |
+| Human approves / rejects | Approval queue (UI) | `approval.decided` | Gateway re-checks kill switch and scope, then executes | email sent → outreach; IO sent → signature |
+| Reply received | Email provider webhook | `reply.received` | Reply triage → flags | → replied → meeting (if requested) / closed_lost (unsubscribe) |
+| Transcript ready | Fireflies webhook | `call.completed` | Call intel → if proposal fields complete: Deal desk | → qualified → proposal (IO send waits) |
+| IO signed *(designed)* | E-sign webhook (DocuSign) | `signature.completed` | Close deal, hand off to delivery | → handoff |
+| SLA timer *(designed)* | Scheduler | `sla.check` | Stall detection: no stage change in N days → flag + reminder | — |
+| Daily digest *(designed)* | Scheduler (cron) | `digest.daily` | Summary of approvals waiting, stalled deals, flags | — |
+
+**Stage exit criteria** (`stages.py`) are checked before every transition, and deals move forward only:
+
+| Enter | Requires |
+| --- | --- |
+| enriched / scored | enrichment / score saved on the deal |
+| outreach | an `email_sent` activity (not just a draft) |
+| replied / meeting | a classified reply / a `meeting_requested` flag |
+| qualified | budget, products, flight dates, decision-maker |
+| proposal / signature / handoff | IO drafted / IO sent / IO signed |
+
+When criteria aren't met, the deal stays put and the missing items are logged on its timeline ("Stays in meeting: qualified needs budget_usd").
+
+**Production durability.** The slice processes events synchronously from files. In production the same handlers would sit behind a durable queue (e.g. SQS or Pub/Sub with a dead-letter queue) or a workflow engine (Temporal) for retries with backoff and timers. The event-id claim moves to a database unique constraint. Handler code doesn't change.
 
 ## 5. Data model
 
