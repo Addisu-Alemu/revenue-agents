@@ -31,6 +31,7 @@ from revenue_agents.orchestrator import Agents, Orchestrator
 from revenue_agents.segments import SEGMENTS_DIR, SegmentRegistry
 from revenue_agents.skills.enrichment import JsonEnricher
 from revenue_agents.storage import STATE_DIR
+from revenue_agents.tracking import Tracker
 
 
 @dataclass
@@ -54,9 +55,9 @@ def build_system(llm: LLM, state_dir: Path = STATE_DIR, segments_dir: Path = SEG
     audit = AuditLog(state_dir / "audit.jsonl")
     kill_switch = KillSwitch(state_dir / "KILL_SWITCH")
 
+    claims = ActionClaims(state_dir / "claims")
     gateway = ActionGateway(
-        AutonomyPolicy(segments, kill_switch), approvals, audit,
-        ActionHandlers(crm, lessons).as_dict(), ActionClaims(state_dir / "claims"),
+        AutonomyPolicy(segments, kill_switch), approvals, audit, ActionHandlers(crm, lessons).as_dict(), claims,
     )
     agents = Agents(
         research=ResearchAgent(JsonEnricher()),
@@ -66,8 +67,9 @@ def build_system(llm: LLM, state_dir: Path = STATE_DIR, segments_dir: Path = SEG
         call_intel=CallIntelAgent(llm, segments),
         deal_desk=DealDeskAgent(segments),
     )
+    tracker = Tracker(crm, approvals, lessons, segments, claims, state_dir / "digests")
     orchestrator = Orchestrator(crm, lessons, gateway, approvals, audit, segments, agents,
-                                ActionClaims(state_dir / "events"))
+                                ActionClaims(state_dir / "events"), tracker)
     return System(crm, lessons, approvals, audit, kill_switch, segments, gateway, orchestrator)
 
 

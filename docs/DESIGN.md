@@ -148,8 +148,8 @@ Every trigger becomes an `Event` with an id from its source (webhook delivery id
 | Reply received | Email provider webhook | `reply.received` | Reply triage → flags | → replied → meeting (if requested) / closed_lost (unsubscribe) |
 | Transcript ready | Fireflies webhook | `call.completed` | Call intel → if proposal fields complete: Deal desk | → qualified → proposal (IO send waits) |
 | IO signed *(designed)* | E-sign webhook (DocuSign) | `signature.completed` | Close deal, hand off to delivery | → handoff |
-| SLA timer *(designed)* | Scheduler | `sla.check` | Stall detection: no stage change in N days → flag + reminder | — |
-| Daily digest *(designed)* | Scheduler (cron) | `digest.daily` | Summary of approvals waiting, stalled deals, flags | — |
+| SLA timer | Scheduler (e.g. every morning) | `sla.check` | Stall detection: days in stage > the pack's `tracking.stall_days` → `stalled_<stage>` flag + reminder on the timeline (once per deal and stage) | — |
+| Daily digest | Scheduler (cron) | `digest.daily` | Pipeline by stage, approvals waiting (overdue after the pack's `approval_reminder_hours`), stalled deals, deals needing attention, today's lessons, **stuck actions** (claims that never completed) | — |
 
 **Stage exit criteria** (`stages.py`) are checked before every transition, and deals move forward only:
 
@@ -162,6 +162,8 @@ Every trigger becomes an `Event` with an id from its source (webhook delivery id
 | proposal / signature / handoff | IO drafted / IO sent / IO signed |
 
 When criteria aren't met, the deal stays put and the missing items are logged on its timeline ("Stays in meeting: qualified needs budget_usd").
+
+**Tracking** (`tracking.py`). Stall limits are per stage and per segment (`tracking.stall_days`, with defaults in code), so "stalled" can mean different things for brands and agencies without code changes. Deals parked on purpose (Tier C in nurture) and closed deals never raise stall alerts, to avoid alert fatigue. Scheduled events use the date as their id (`digest:2026-10-16`), so a scheduler firing twice produces one digest. The digest is saved as JSON for the UI and lists stuck action claims, which is where the gateway's at-most-once trade-off surfaces to a human.
 
 **Production durability.** The slice processes events synchronously from files. In production the same handlers would sit behind a durable queue (e.g. SQS or Pub/Sub with a dead-letter queue) or a workflow engine (Temporal) for retries with backoff and timers. The event-id claim moves to a database unique constraint. Handler code doesn't change.
 

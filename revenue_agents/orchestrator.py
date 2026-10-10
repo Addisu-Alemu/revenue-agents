@@ -10,6 +10,8 @@ so a retry can run.
     approval.decided -> execute or drop the approved/rejected action
     reply.received   -> reply triage -> flags (meeting / pricing / injection / unsubscribe)
     call.completed   -> call intel -> qualified? -> deal desk drafts IO (sending waits for approval)
+    sla.check        -> flag stalled deals and remind the rep (once per deal and stage)
+    digest.daily     -> summary: approvals waiting, stalled and flagged deals, new lessons, stuck actions
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from revenue_agents.models import Deal, Model, Reply, Stage
 from revenue_agents.segments import SegmentRegistry
 from revenue_agents.stages import ORDER, is_forward, missing_for
 from revenue_agents.storage import utc_now
+from revenue_agents.tracking import Tracker
 
 # Executing these actions is the evidence for the next stage.
 STAGE_AFTER = {ActionType.SEND_EMAIL: Stage.OUTREACH, ActionType.DRAFT_IO: Stage.PROPOSAL,
@@ -64,7 +67,8 @@ class Orchestrator:
     name = "orchestrator"
 
     def __init__(self, crm: CRM, lessons: LessonStore, gateway: ActionGateway, approvals: ApprovalQueue,
-                 audit: AuditLog, segments: SegmentRegistry, agents: Agents, events: ActionClaims) -> None:
+                 audit: AuditLog, segments: SegmentRegistry, agents: Agents, events: ActionClaims,
+                 tracker: Tracker) -> None:
         self._crm = crm
         self._lessons = lessons
         self._gateway = gateway
@@ -73,11 +77,14 @@ class Orchestrator:
         self._segments = segments
         self._agents = agents
         self._events = events
+        self._tracker = tracker
         self._handlers = {
             EventType.LEAD_CREATED: self._on_lead_created,
             EventType.APPROVAL_DECIDED: self._on_approval,
             EventType.REPLY_RECEIVED: self._on_reply,
             EventType.CALL_COMPLETED: self._on_call,
+            EventType.SLA_CHECK: self._on_sla_check,
+            EventType.DIGEST_DAILY: self._on_digest,
         }
 
     def handle(self, event: Event) -> EventReport:
@@ -181,6 +188,29 @@ class Orchestrator:
         if io.output.errors:
             return steps + self._flag(deal, "io_blocked", "; ".join(io.output.errors))
         return steps + self._submit(io.actions)
+
+    def _on_sla_check(self, event: Event) -> list[str]:
+        stalled = self._tracker.stalled(event.now)
+        steps = [f"SLA check: {len(stalled)} stalled deal(s)"]
+        for item in stalled:
+            flag = f"stalled_{item.stage.value}"
+            deal = self._crm.get_deal(item.deal_id)
+            action = Action(id=f"flag_deal:{deal.id}:{flag}", type=ActionType.FLAG_DEAL, agent=self.name,
+                            deal_id=deal.id, summary=f"Flag {flag}: {item.company}", payload={"flags": [flag]})
+            result = self._gateway.submit(action, deal)
+            if result.outcome is Outcome.EXECUTED:  # remind once per deal and stage, not on every check
+                reminder = (f"Follow up with {item.contact}: no progress in {item.stage.value} "
+                            f"for {item.days_in_stage:.0f} days (limit {item.limit_days})")
+                self._crm.log(deal.id, "reminder", reminder)
+                steps.append(f"{item.deal_id} {item.company}: {reminder}")
+            else:
+                steps.append(f"{item.deal_id} {item.company}: still stalled ({result.outcome.value})")
+        return steps
+
+    def _on_digest(self, event: Event) -> list[str]:
+        digest = self._tracker.digest(event.now)
+        self._audit.record(self.name, "digest_created", detail=digest.date.isoformat())
+        return digest.render().splitlines()
 
     # --- Helpers ---------------------------------------------------------------
 

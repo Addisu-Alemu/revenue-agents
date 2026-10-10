@@ -25,6 +25,9 @@ def test_brand_demo_runs_end_to_end(tmp_path):
     assert "Suspicious content: ignored as instructions" in output
     assert "Tier C: no outreach, left for nurture" in output
     assert "used in: D-002" in output
+    assert "6 days later" in output
+    assert "Follow up with Owen Castillo: no progress in replied" in output
+    assert "Daily digest" in output
     assert "approvals pending: 0" in output
 
 

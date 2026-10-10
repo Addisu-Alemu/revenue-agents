@@ -3,6 +3,7 @@
 The story is driven by the data, not by segment-specific code:
   1. the first lead that has a call transcript: lead -> its replies -> its call -> IO
   2. every other lead in the segment, then their replies
+  3. a few days later: the scheduled SLA check and daily digest
 So the lesson learned on the call is available when the later emails are drafted.
 
 High-risk actions pause for a human (or are approved automatically with
@@ -11,6 +12,7 @@ High-risk actions pause for a human (or are approved automatically with
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import shutil
 from collections.abc import Callable
@@ -21,7 +23,7 @@ from revenue_agents.guardrails.policy import ActionType
 from revenue_agents.llm import LLMError
 from revenue_agents.models import Lead, Reply
 from revenue_agents.segments import SegmentConfigError, SegmentNotFoundError
-from revenue_agents.storage import STATE_DIR
+from revenue_agents.storage import STATE_DIR, utc_now
 from revenue_agents.system import System, build_system, make_llm
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -85,6 +87,20 @@ class _Demo:
         for reply in (r for r in replies if first is None or r.lead_id != first.id):
             if any(lead.id == reply.lead_id for lead in leads):
                 self.reply(reply)
+
+        self.days_later(6)
+
+    def days_later(self, days: int) -> None:
+        """Simulate the scheduler firing a few days from now."""
+        now = utc_now() + dt.timedelta(days=days)
+        day = now.date().isoformat()
+        self.header(f"{days} days later, {day}: scheduled SLA check and daily digest")
+        self.handle(Event(id=f"sla:{day}", type=EventType.SLA_CHECK, payload={"now": now.isoformat()}))
+        report = self.system.orchestrator.handle(
+            Event(id=f"digest:{day}", type=EventType.DIGEST_DAILY, payload={"now": now.isoformat()}))
+        self.out("")
+        for line in report.steps:  # the digest is already formatted
+            self.out(f"  {line}")
 
     # --- Acts --------------------------------------------------------------------
 
