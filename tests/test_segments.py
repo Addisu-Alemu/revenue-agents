@@ -89,3 +89,15 @@ def test_pack_cannot_loosen_autonomy(tmp_path, brand_config):
     brand_config["autonomy"] = {"first_touch_approval_tiers": ["B"]}
     with pytest.raises(SegmentConfigError, match="can add tiers but not remove A"):
         registry_with(tmp_path, brand_config).get("brand")
+
+
+def test_template_with_unknown_placeholder_is_rejected(tmp_path, brand_config):
+    brand_config["templates"]["first_touch_body"] = "Hi {frist_name}"
+    with pytest.raises(SegmentConfigError, match="unknown placeholders \\['frist_name'\\]"):
+        registry_with(tmp_path, brand_config).get("brand")
+
+
+def test_malformed_template_is_rejected(tmp_path, brand_config):
+    brand_config["templates"]["first_touch_subject"] = "Hello {company"
+    with pytest.raises(SegmentConfigError, match="malformed"):
+        registry_with(tmp_path, brand_config).get("brand")
