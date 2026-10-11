@@ -17,7 +17,10 @@ from revenue_agents.esign import ESignProvider
 from revenue_agents.guardrails.gateway import Handler
 from revenue_agents.guardrails.policy import Action, ActionType
 from revenue_agents.lessons import LessonStore
-from revenue_agents.models import DealFields, Enrichment, LeadScore, Lesson
+from revenue_agents.models import DealFields, Enrichment, LeadScore, Lesson, Message
+from revenue_agents.storage import utc_now
+
+SENDER = "daniel.reyes@cool.example"
 
 
 class ActionHandlers:
@@ -35,6 +38,7 @@ class ActionHandlers:
             ActionType.CLASSIFY_REPLY: self.classify_reply,
             ActionType.RECORD_LESSON: self.record_lesson,
             ActionType.SEND_EMAIL: self.send_email,
+            ActionType.PREPARE_CALL_BRIEF: self.prepare_call_brief,
             ActionType.DRAFT_IO: self.draft_io,
             ActionType.SEND_IO: self.send_io,
             ActionType.CLOSE_DEAL: self.close_deal,
@@ -79,10 +83,22 @@ class ActionHandlers:
         return added
 
     def send_email(self, action: Action) -> dict[str, str]:
+        """Send (mock outbox) and store the email in the deal's conversation, so replies can be linked to it."""
         email = action.payload
-        self._crm.log(action.deal_id, "email_sent", f"Email to {email['to']}: {email['subject']}", email)
+        message = Message(id=f"msg:{action.id}", thread_id=f"T-{action.deal_id}", deal_id=action.deal_id,
+                          direction="outbound", sender=SENDER, to=email["to"], subject=email["subject"],
+                          body=email["body"], at=utc_now(),
+                          meta={"action_id": action.id, "lessons_used": email.get("lessons_used", [])})
+        self._crm.add_message(message)
+        self._crm.log(action.deal_id, "email_sent", f"Email to {email['to']}: {email['subject']}",
+                      {**email, "message_id": message.id, "thread_id": message.thread_id})
         self._lessons.record_use(email.get("lessons_used", []), used_in=action.id, deal_id=action.deal_id)
-        return {"status": "sent (mock)", "to": email["to"]}
+        return {"status": "sent (mock)", "to": email["to"], "message_id": message.id}
+
+    def prepare_call_brief(self, action: Action) -> None:
+        self._crm.log(action.deal_id, "call_brief", action.summary,
+                      {"brief": action.payload["brief"], "markdown": action.payload["markdown"]})
+        self._lessons.record_use(action.payload.get("lessons_used", []), used_in=action.id, deal_id=action.deal_id)
 
     def draft_io(self, action: Action) -> None:
         self._crm.log(action.deal_id, "document", action.summary,

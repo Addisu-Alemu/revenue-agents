@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 from enum import Enum
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -132,7 +133,24 @@ class Reply(Model):
     sender: str = Field(alias="from")
     subject: str
     received_at: dt.datetime
+    in_reply_to: str | None = None  # id of our email it answers (the In-Reply-To header, when the provider gives it)
     body: str
+
+
+class Message(Model):
+    """One email in a deal's conversation, either way: what HubSpot stores as an email engagement."""
+
+    id: str  # like an email Message-ID
+    thread_id: str
+    deal_id: str
+    direction: Literal["outbound", "inbound"]
+    sender: str
+    to: str
+    subject: str
+    body: str
+    at: dt.datetime
+    in_reply_to: str | None = None
+    meta: dict[str, Any] = Field(default_factory=dict)  # e.g. who approved it, or how the agents read it
 
 
 # --- Deals -----------------------------------------------------------------

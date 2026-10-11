@@ -15,7 +15,7 @@ from typing import Any, Protocol
 
 from pydantic import Field
 
-from revenue_agents.models import Deal, Lead, Model, Stage
+from revenue_agents.models import Deal, Lead, Message, Model, Stage
 from revenue_agents.storage import STATE_DIR, locked, read_json, utc_now, write_json
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -42,6 +42,8 @@ class CRM(Protocol):
     def save_deal(self, deal: Deal) -> None: ...
     def log(self, deal_id: str, kind: str, summary: str, data: dict[str, Any] | None = None) -> Activity: ...
     def timeline(self, deal_id: str) -> list[Activity]: ...
+    def add_message(self, message: Message) -> None: ...
+    def messages(self, deal_id: str) -> list[Message]: ...
 
 
 class MockHubSpot:
@@ -107,6 +109,19 @@ class MockHubSpot:
     def timeline(self, deal_id: str) -> list[Activity]:
         return [Activity.model_validate(a) for a in self._read()["activities"] if a["deal_id"] == deal_id]
 
+    # --- Conversation ------------------------------------------------------------
+
+    def add_message(self, message: Message) -> None:
+        """Store an email in the deal's conversation. The same message id is stored once."""
+        with locked(self._path):
+            state = self._read()
+            if not any(item["id"] == message.id for item in state["messages"]):
+                state["messages"].append(message.model_dump(mode="json"))
+                write_json(self._path, state)
+
+    def messages(self, deal_id: str) -> list[Message]:
+        return [Message.model_validate(m) for m in self._read()["messages"] if m["deal_id"] == deal_id]
+
     # --- Internals -------------------------------------------------------------
 
     def _read(self) -> dict[str, Any]:
@@ -114,6 +129,7 @@ class MockHubSpot:
         if state is None:
             leads = json.loads(self._seed_leads.read_text(encoding="utf-8"))
             state = {"leads": {lead["id"]: lead for lead in leads}, "deals": {}, "activities": []}
+        state.setdefault("messages", [])
         return state
 
     @staticmethod
