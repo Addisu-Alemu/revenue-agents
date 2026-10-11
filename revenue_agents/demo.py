@@ -1,32 +1,24 @@
-"""The live demo: one segment's leads, replies and calls, run through the real system.
+"""The live demo in the terminal: one segment's story, run through the real system.
 
-The story is driven by the data, not by segment-specific code:
-  1. the first lead that has a call transcript: lead -> its replies -> its call -> IO -> signature
-  2. every other lead in the segment, then their replies
-  3. a few days later: the scheduled SLA check and daily digest
-So the lesson learned on the call is available when the later emails are drafted.
-
-High-risk actions pause for a human (or are approved automatically with
---auto-approve). Fake mode is always announced as scripted.
+The order of events comes from story.py (shared with the UI). High-risk actions
+pause for a human (or are approved automatically with --auto-approve). Fake
+mode is always announced as scripted.
 """
 
 from __future__ import annotations
 
-import datetime as dt
-import json
-import shutil
 from collections.abc import Callable
 from pathlib import Path
 
-from revenue_agents.events import Event, EventType
+from revenue_agents import story
+from revenue_agents.events import Event
 from revenue_agents.guardrails.policy import ActionType
 from revenue_agents.llm import LLMError
 from revenue_agents.models import Lead, Reply
 from revenue_agents.segments import SegmentConfigError, SegmentNotFoundError
-from revenue_agents.storage import STATE_DIR, utc_now
-from revenue_agents.system import System, build_system, make_llm
+from revenue_agents.storage import STATE_DIR
+from revenue_agents.system import System, build_system, make_llm, reset_state
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DEMO_STATE = STATE_DIR / "demo"
 REVIEWER = "demo-reviewer@cool.example"
 IO_SUMMARY_LINES = ("# Insertion Order", "| Signatory", "**Flight dates:**", "**Total budget:**", "**Payment terms:**")
@@ -39,8 +31,8 @@ Ask = Callable[[str], str]
 def run(segment: str = "brand", llm_mode: str = "fake", state_dir: Path = DEMO_STATE, auto_approve: bool = False,
         fresh: bool = True, out: Out = print, ask: Ask = input) -> int:
     state_dir = Path(state_dir)
-    if fresh and state_dir.exists():
-        shutil.rmtree(state_dir)
+    if fresh:
+        reset_state(state_dir)  # keeps the kill switch: a fresh run never silently turns it off
 
     out(f"Revenue Agents demo | segment: {segment} | model: {llm_mode}")
     if llm_mode == "fake":
@@ -71,34 +63,24 @@ class _Demo:
         self.previewed: set[str] = set()  # deals whose email was already shown in an approval
 
     def story(self, segment: str) -> None:
-        leads = sorted((lead for lead in self.system.crm.leads() if lead.segment == segment), key=lambda lead: lead.id)
-        replies = [Reply.model_validate(r) for r in json.loads((DATA_DIR / "replies.json").read_text())]
-        transcripts = {path.name.split("_")[0]: path for path in sorted((DATA_DIR / "transcripts").glob("*.txt"))}
-
-        first = next((lead for lead in leads if lead.id in transcripts), None)
-        if first:
-            self.lead_created(first)
-            for reply in (r for r in replies if r.lead_id == first.id):
-                self.reply(reply, show_duplicate=True)
-            self.call(first, transcripts[first.id])
-            self.signature(first)
-
-        for lead in (lead for lead in leads if lead is not first):
-            self.lead_created(lead)
-        for reply in (r for r in replies if first is None or r.lead_id != first.id):
-            if any(lead.id == reply.lead_id for lead in leads):
-                self.reply(reply)
-
-        self.days_later(6)
+        for step in story.plan(self.system.crm.leads(), segment):
+            self.header(step.title)
+            if step.kind == "lead":
+                self.lead_created(step.lead)
+            elif step.kind == "reply":
+                self.reply(step.reply, step.show_duplicate)
+            elif step.kind == "call":
+                self.call(step.lead, step.transcript)
+            elif step.kind == "signature":
+                self.signature(step)
+            else:
+                self.days_later(step.days)
 
     def days_later(self, days: int) -> None:
         """Simulate the scheduler firing a few days from now."""
-        now = utc_now() + dt.timedelta(days=days)
-        day = now.date().isoformat()
-        self.header(f"{days} days later, {day}: scheduled SLA check and daily digest")
-        self.handle(Event(id=f"sla:{day}", type=EventType.SLA_CHECK, payload={"now": now.isoformat()}))
-        report = self.system.orchestrator.handle(
-            Event(id=f"digest:{day}", type=EventType.DIGEST_DAILY, payload={"now": now.isoformat()}))
+        sla, digest = story.scheduled_events(days)
+        self.handle(sla)
+        report = self.system.orchestrator.handle(digest)
         self.out("")
         for line in report.steps:  # the digest is already formatted
             self.out(f"  {line}")
@@ -106,9 +88,7 @@ class _Demo:
     # --- Acts --------------------------------------------------------------------
 
     def lead_created(self, lead: Lead) -> None:
-        self.header(f"New lead: {lead.company} ({lead.contact.name}, {lead.contact.title})")
-        self.handle(Event(id=f"lead:{lead.id}", type=EventType.LEAD_CREATED, payload={"lead_id": lead.id}),
-                    review=False)
+        self.handle(story.lead_event(lead), review=False)
         deal = self.system.crm.deal_for_lead(lead.id)
         if deal.score:
             self.out("  Why this tier:")
@@ -120,39 +100,27 @@ class _Demo:
             self.show_sent_email(deal.id)
 
     def reply(self, reply: Reply, show_duplicate: bool = False) -> None:
-        self.header(f"Reply {reply.id} from {reply.sender}")
         lines = [line.strip() for line in reply.body.splitlines() if line.strip()]
         first = next((line for line in lines if not line.lower().startswith(GREETINGS)), lines[0])
         self.out(f'    "{first[:100]}{"..." if len(first) > 100 else ""}"')
-        event = Event(id=f"reply:{reply.id}", type=EventType.REPLY_RECEIVED,
-                      payload={"reply": reply.model_dump(mode="json", by_alias=True)})
+        event = story.reply_event(reply)
         self.handle(event)
         if show_duplicate:
             self.out("  Same webhook delivered again (at-least-once delivery):")
             self.handle(event)
 
     def call(self, lead: Lead, transcript: Path) -> None:
-        self.header(f"Call transcript ready (Fireflies): {transcript.name}")
-        self.handle(Event(id=f"call:{transcript.stem}", type=EventType.CALL_COMPLETED,
-                          payload={"lead_id": lead.id, "transcript_id": transcript.stem,
-                                   "transcript": transcript.read_text()}))
+        self.handle(story.call_event(lead, transcript))
 
-    def signature(self, lead: Lead) -> None:
-        deal = self.system.crm.deal_for_lead(lead.id)
-        sent = [a for a in self.system.crm.timeline(deal.id) if a.kind == "io_sent"]
-        if not sent:
+    def signature(self, step: story.Step) -> None:
+        try:
+            lines = story.run(self.system, step)
+        except story.NotReadyError:
+            self.out("  No IO was sent, so there is nothing to sign.")
             return
-        envelope_id = sent[-1].data["envelope_id"]
-        signer = (deal.fields.decision_maker or lead.contact.name).split(" (")[0]
-
-        self.header(f"E-signature webhook: someone claims IO {envelope_id} is signed")
-        self.out("  A forged webhook arrives first, for an envelope we never sent:")
-        self.handle(Event(id="esign:ENV-FAKE-001", type=EventType.SIGNATURE_COMPLETED,
-                          payload={"envelope_id": "ENV-FAKE-001"}))
-        self.out(f"  Then {signer} really signs in the e-sign tool, and its webhook arrives:")
-        self.system.esign.sign(envelope_id, signed_by=signer)  # what DocuSign would record
-        self.handle(Event(id=f"esign:{envelope_id}", type=EventType.SIGNATURE_COMPLETED,
-                          payload={"envelope_id": envelope_id}))
+        for line in lines:
+            self.out(f"  - {line}")
+        deal = self.system.crm.deal_for_lead(step.lead.id)
         handoff = [a for a in self.system.crm.timeline(deal.id) if a.kind == "handoff"]
         if handoff:
             data = handoff[-1].data
@@ -178,9 +146,14 @@ class _Demo:
             elif action.type is ActionType.SEND_IO:
                 self.show_io(action.payload["document"])
             approved = self.auto_approve or self.ask("  Approve? [y/N] ").strip().lower() in ("y", "yes")
+            note, save_lesson = None, False
+            if not approved and action.type is ActionType.SEND_EMAIL:
+                note = self.ask("  Feedback for a redraft (empty = just reject): ").strip() or None
+                if note:
+                    save_lesson = self.ask("  Save it as a lesson for future emails? [y/N] ").strip().lower() in (
+                        "y", "yes")
             self.out(f"  {'Approved' if approved else 'Rejected'} by {REVIEWER}")
-            self.handle(Event(id=f"approval:{request.id}", type=EventType.APPROVAL_DECIDED,
-                              payload={"request_id": request.id, "approved": approved, "reviewer": REVIEWER}))
+            self.handle(story.approval_event(request.id, approved, REVIEWER, note, save_lesson))
 
     def show_sent_email(self, deal_id: str) -> None:
         sent = [a for a in self.system.crm.timeline(deal_id) if a.kind == "email_sent"]

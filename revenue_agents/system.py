@@ -7,6 +7,7 @@ the demo script and the UI build the same system with different parts.
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from revenue_agents.guardrails.approvals import ApprovalQueue
 from revenue_agents.guardrails.audit import AuditLog
 from revenue_agents.guardrails.claims import ActionClaims
 from revenue_agents.guardrails.gateway import ActionGateway
+from revenue_agents.guardrails.held_events import HeldEvents
 from revenue_agents.guardrails.kill_switch import KillSwitch
 from revenue_agents.guardrails.policy import AutonomyPolicy
 from revenue_agents.handlers import ActionHandlers
@@ -70,9 +72,10 @@ def build_system(llm: LLM, state_dir: Path = STATE_DIR, segments_dir: Path = SEG
         call_intel=CallIntelAgent(llm, segments),
         deal_desk=DealDeskAgent(segments),
     )
-    tracker = Tracker(crm, approvals, lessons, segments, claims, state_dir / "digests")
+    held = HeldEvents(state_dir / "held_events.json")
+    tracker = Tracker(crm, approvals, lessons, segments, claims, state_dir / "digests", held)
     orchestrator = Orchestrator(crm, lessons, gateway, approvals, audit, segments, agents,
-                                ActionClaims(state_dir / "events"), tracker, esign)
+                                ActionClaims(state_dir / "events"), tracker, esign, kill_switch, held)
     return System(crm, esign, lessons, approvals, audit, kill_switch, segments, gateway, orchestrator)
 
 
@@ -86,3 +89,14 @@ def make_llm(mode: str) -> LLM:
     if mode == "fake":
         return demo_llm()
     raise ValueError(f"unknown LLM mode '{mode}': use 'fake' or 'claude'")
+
+
+def reset_state(state_dir: Path) -> None:
+    """Delete all runtime state except the kill switch, so a reset can never silently turn it off."""
+    state_dir = Path(state_dir)
+    if not state_dir.exists():
+        return
+    for path in state_dir.iterdir():
+        if path.name == "KILL_SWITCH":
+            continue
+        shutil.rmtree(path) if path.is_dir() else path.unlink()

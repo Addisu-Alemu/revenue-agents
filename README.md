@@ -54,6 +54,14 @@ The demo runs the brand segment's mock data through the real system: a new lead 
 
 In fake mode, model answers are scripted for the mock data (and the demo says so); everything else is the real code path. `--llm claude` never falls back to fake: if the key is missing or has no credit, it stops with an error. Demo state is written to `state/demo/` and reset on each run (`--keep-state` to keep it).
 
+## UI
+
+```bash
+streamlit run app.py
+```
+
+Opens in the browser (http://localhost:8501). The **Live demo** page runs the same story one step at a time, with approvals decided inline; **Pipeline**, **Deal detail** and **Approvals** show the state. It shares `state/demo/` with `run_demo.py`, and every button sends an event to the orchestrator, so the policy and gateway apply exactly as in the terminal.
+
 ## Tests
 
 ```bash
@@ -108,7 +116,14 @@ Add `segments/<name>.yaml` following [`segments/brand.yaml`](segments/brand.yaml
 
 ## Kill switch
 
+An emergency **pause** for every agent action. Works on Windows, macOS and Linux:
+
 ```bash
-touch state/KILL_SWITCH    # stop every agent action, including already-approved ones
-rm state/KILL_SWITCH       # resume
+python scripts/kill_switch.py on --reason "Bad emails going out"   # pause
+python scripts/kill_switch.py status                                # held events, approved-but-waiting actions
+python scripts/kill_switch.py off                                   # resume
 ```
+
+While it is on, **nothing executes and nothing is lost**: incoming events (new leads, replies, calls, signatures) are **held** in arrival order; human approval decisions are still recorded, but the approved actions wait; the daily digest still runs (it only reports). `off` replays held events in order, then runs approved actions that waited. Pause and resume are written to the audit log. Resetting the demo never turns the switch off.
+
+It defaults to the demo state (`state/demo/`); use `--state-dir` for another one. The switch itself is the file `KILL_SWITCH` in that folder, and the gateway checks it before every action as a second layer.

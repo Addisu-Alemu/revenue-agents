@@ -149,16 +149,21 @@ def test_rejected_draft_flags_the_deal(tmp_path, llm):
     assert "outreach_draft_rejected" in deal.flags
 
 
-def test_kill_switch_stops_a_new_lead_at_prospect(system):
-    system.kill_switch.engage("Pause everything")
+def test_kill_switch_holds_a_new_lead_until_release(system):
+    system.orchestrator.pause("Pause everything", by="ops@cool.example")
     report = system.orchestrator.handle(lead_created("L-002"))
 
-    assert stage(system, "D-002") is Stage.PROSPECT
-    assert report.steps[-1] == "Stopped: lead could not be enriched"
+    assert report.status == "held"
+    assert system.crm.deals() == []  # nothing ran
+    assert [e.id for e in system.orchestrator.held_events()] == ["lead:L-002"]
+
+    system.orchestrator.resume(by="ops@cool.example")
+    assert stage(system, "D-002") is Stage.OUTREACH  # processed after release: nothing lost
+    assert system.orchestrator.held_events() == []
 
 
-def test_kill_switch_pulled_mid_event_stops_the_lead(system):
-    """An operator hits the kill switch while a lead is being processed: nothing more happens."""
+def test_kill_switch_pulled_mid_event_is_replayed_on_release(system):
+    """An operator hits the kill switch while a lead is being processed: it stops, then finishes on release."""
     research = system.orchestrator._agents.research
     original_run = research.run
 
@@ -170,8 +175,14 @@ def test_kill_switch_pulled_mid_event_stops_the_lead(system):
     research.run = run_then_kill
     report = system.orchestrator.handle(lead_created("L-002"))
 
-    assert report.steps[-1] == "Stopped: lead could not be enriched"
+    assert report.status == "held"
+    assert "Kill switch pulled during processing" in report.steps[-1]
     assert stage(system, "D-002") is Stage.PROSPECT
+
+    research.run = original_run
+    system.orchestrator.resume(by="ops@cool.example")
+    assert stage(system, "D-002") is Stage.OUTREACH
+    assert len(emails(system, "D-002")) == 1
 
 
 def test_lead_stops_if_its_score_does_not_land(system):

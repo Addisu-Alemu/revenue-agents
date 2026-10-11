@@ -52,6 +52,10 @@ class ApprovalQueue:
             raise KeyError(f"no approval request '{request_id}'")
         return request
 
+    def all(self) -> list[ApprovalRequest]:
+        """Every request, newest first (pending and decided)."""
+        return sorted(self._load().values(), key=lambda request: request.created_at, reverse=True)
+
     def pending(self) -> list[ApprovalRequest]:
         return [request for request in self._load().values() if request.status is ApprovalStatus.PENDING]
 

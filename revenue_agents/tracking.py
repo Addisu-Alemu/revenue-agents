@@ -13,8 +13,9 @@ from pathlib import Path
 from pydantic import Field
 
 from revenue_agents.crm import CRM
-from revenue_agents.guardrails.approvals import ApprovalQueue
+from revenue_agents.guardrails.approvals import ApprovalQueue, ApprovalRequest, ApprovalStatus
 from revenue_agents.guardrails.claims import ActionClaims
+from revenue_agents.guardrails.held_events import HeldEvents
 from revenue_agents.lessons import LessonStore
 from revenue_agents.models import Deal, Model, Stage
 from revenue_agents.segments import SegmentRegistry
@@ -52,6 +53,8 @@ class Digest(Model):
     needs_attention: dict[str, list[str]]
     new_lessons: list[str]
     stuck_actions: list[str] = Field(default_factory=list)
+    approved_not_executed: list[str] = Field(default_factory=list)
+    held_events: list[str] = Field(default_factory=list)
 
     def render(self) -> str:
         lines = [f"Daily digest {self.date.isoformat()}",
@@ -66,6 +69,10 @@ class Digest(Model):
         lines += [f"  - {deal_id}: {', '.join(flags)}" for deal_id, flags in self.needs_attention.items()] or ["  none"]
         lines.append(f"New lessons ({len(self.new_lessons)}):")
         lines += [f"  - {text}" for text in self.new_lessons] or ["  none"]
+        lines.append(f"Approved but not executed ({len(self.approved_not_executed)}):")
+        lines += [f"  - {summary} (use Run now)" for summary in self.approved_not_executed] or ["  none"]
+        lines.append(f"Held by the kill switch ({len(self.held_events)}):")
+        lines += [f"  - {event}" for event in self.held_events] or ["  none"]
         lines.append(f"Stuck actions ({len(self.stuck_actions)}):")
         lines += [f"  - {action_id} (started but never finished: check by hand)" for action_id in self.stuck_actions] or [
             "  none"]
@@ -74,13 +81,19 @@ class Digest(Model):
 
 class Tracker:
     def __init__(self, crm: CRM, approvals: ApprovalQueue, lessons: LessonStore, segments: SegmentRegistry,
-                 claims: ActionClaims, digest_dir: Path) -> None:
+                 claims: ActionClaims, digest_dir: Path, held: HeldEvents) -> None:
         self._crm = crm
         self._approvals = approvals
         self._lessons = lessons
         self._segments = segments
         self._claims = claims
         self._digest_dir = Path(digest_dir)
+        self._held = held
+
+    def approved_waiting(self) -> list[ApprovalRequest]:
+        """Approved by a human but never executed (no claim): blocked by the kill switch, or failed."""
+        return [request for request in self._approvals.all()
+                if request.status is ApprovalStatus.APPROVED and not self._claims.exists(request.action.id)]
 
     def stalled(self, now: dt.datetime) -> list[StalledDeal]:
         result = []
@@ -115,6 +128,8 @@ class Tracker:
         new_lessons = [lesson.text for lesson in self._lessons.all() if lesson.created_at.date() == now.date()]
 
         digest = Digest(date=now.date(), pipeline=pipeline, approvals_waiting=waiting, stalled=self.stalled(now),
-                        needs_attention=attention, new_lessons=new_lessons, stuck_actions=self._claims.in_progress())
+                        needs_attention=attention, new_lessons=new_lessons, stuck_actions=self._claims.in_progress(),
+                        approved_not_executed=[r.action.summary for r in self.approved_waiting()],
+                        held_events=[f"{e.type.value} ({e.id})" for e in self._held.all()])
         write_json(self._digest_dir / f"{digest.date.isoformat()}.json", digest.model_dump(mode="json"))
         return digest

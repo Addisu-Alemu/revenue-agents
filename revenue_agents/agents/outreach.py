@@ -7,7 +7,9 @@ draft: phrases the pack forbids are rejected (one retry with feedback), and
 only lessons that were actually offered can be cited.
 
 The agent proposes `send_email`. Whether it goes out automatically or waits
-for a human is the policy's decision (Tier A first touch waits).
+for a human is the policy's decision (Tier A first touch waits). If a human
+rejects a draft with a note, the agent writes the next version with that
+note as reviewer feedback.
 """
 
 from __future__ import annotations
@@ -32,7 +34,8 @@ SYSTEM_PROMPT = f"""You write the opening of first-touch sales emails for Cool A
 Write `opening`: one or two sentences, specific to this company, based on its facts and buying signals.
 Pick `value_prop_index`: the number of the value proposition that fits this company best.
 Follow the tone you are given. No pricing, discounts or promises.
-If any of the lessons you are given shaped your choice, list their ids in `lessons_used`."""
+If any of the lessons you are given shaped your choice, list their ids in `lessons_used`.
+If a colleague reviewed a previous draft, their feedback comes first: follow it."""
 
 
 class OutreachDraft(Model):
@@ -49,6 +52,18 @@ class Email(Model):
     lessons_used: list[str]
 
 
+class Review(Model):
+    """A human rejected a draft and said why. The next draft must follow the feedback."""
+
+    feedback: str
+    previous_body: str
+    next_version: int
+
+    def as_prompt(self) -> str:
+        return (f"\n\nA colleague reviewed your previous draft and rejected it. Their feedback (follow it):\n"
+                f"{self.feedback}\n\nPrevious draft:\n{self.previous_body}")
+
+
 class DraftRejectedError(ValueError):
     """The model couldn't produce an acceptable draft within the allowed attempts."""
 
@@ -61,23 +76,26 @@ class OutreachAgent(Agent):
         self._segments = segments
         self._sender_name = sender_name
 
-    def run(self, lead: Lead, deal: Deal, enrichment: Enrichment, lessons: list[Lesson]) -> AgentResult[Email]:
+    def run(self, lead: Lead, deal: Deal, enrichment: Enrichment, lessons: list[Lesson],
+            review: Review | None = None) -> AgentResult[Email]:
         pack = self._segments.get(lead.segment)
         relevant = [lesson for lesson in lessons if lesson.segment == lead.segment and "outreach" in lesson.applies_to]
-        prompt = _prompt(lead, enrichment, pack, relevant)
+        prompt = _prompt(lead, enrichment, pack, relevant) + (review.as_prompt() if review else "")
+        version = review.next_version if review else 1
 
-        feedback = ""
+        retry_note = ""
         for _ in range(MAX_ATTEMPTS):
-            draft = self._llm.complete(system=SYSTEM_PROMPT, prompt=prompt + feedback, schema=OutreachDraft)
+            draft = self._llm.complete(system=SYSTEM_PROMPT, prompt=prompt + retry_note, schema=OutreachDraft)
             email, problems = self._render(lead, pack, draft, {lesson.id for lesson in relevant})
             if not problems:
                 action = self.propose(
-                    ActionType.SEND_EMAIL, deal, key="first_touch",
-                    summary=f"First email to {lead.contact.name} at {lead.company}",
+                    ActionType.SEND_EMAIL, deal, key="first_touch" if version == 1 else f"first_touch:v{version}",
+                    summary=f"First email to {lead.contact.name} at {lead.company}"
+                            + (f" (draft v{version}, after review)" if version > 1 else ""),
                     payload=email.model_dump(mode="json"),
                 )
                 return AgentResult(output=email, actions=[action])
-            feedback = "\n\nYour previous draft was rejected: " + "; ".join(problems) + ". Fix this."
+            retry_note = "\n\nYour previous draft was rejected: " + "; ".join(problems) + ". Fix this."
 
         raise DraftRejectedError(f"No acceptable draft for {lead.company}: {'; '.join(problems)}")
 

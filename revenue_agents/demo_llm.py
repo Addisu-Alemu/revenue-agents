@@ -72,6 +72,19 @@ OUTREACH_OPENINGS: dict[str, tuple[str, int]] = {
 }
 DEFAULT_OPENING = ("I came across your team and thought this might be relevant.", 0)
 
+# Fake mode can't read a reviewer's note, so a redraft uses a prepared alternative opening.
+# Suggested notes for the live demo are in the comments.
+OUTREACH_REDRAFTS: dict[str, tuple[str, int]] = {
+    # e.g. "Mention their Q1 menu launch"
+    "BrightBite Burgers": ("With your national menu launch coming in Q1, every one of your 420 locations will need "
+                           "local versions of the new ads.", 0),
+    # e.g. "Talk about their new client"
+    "Lumen Media Group": ("With the national retail account starting, your team will be producing a lot more creative "
+                          "variations.", 0),
+    "Copperline Creative": ("If the regional restaurant pitch lands, you'll need local creative for every location.", 0),
+}
+DEFAULT_REDRAFT = ("Following up with something more specific to your team's plans this quarter.", 0)
+
 
 def _reply(call: LLMCall) -> dict[str, Any]:
     match = re.search(r'source="reply:([^"]+)"', call.prompt)
@@ -87,7 +100,11 @@ def _call(call: LLMCall) -> dict[str, Any]:
 
 def _outreach(call: LLMCall) -> dict[str, Any]:
     company = re.search(r"^Company: (.+)$", call.prompt, re.MULTILINE)
-    opening, value_prop = OUTREACH_OPENINGS.get(company.group(1) if company else "", DEFAULT_OPENING)
+    name = company.group(1) if company else ""
+    if "Their feedback (follow it)" in call.prompt:
+        opening, value_prop = OUTREACH_REDRAFTS.get(name, DEFAULT_REDRAFT)
+    else:
+        opening, value_prop = OUTREACH_OPENINGS.get(name, DEFAULT_OPENING)
     # Like a model that reads the offered lessons: prefer the one about brand control and lead with
     # the matching value prop (approval workflow).
     offered = re.findall(r"\[(lesson:[^\]]+)\] (.+)", call.prompt)

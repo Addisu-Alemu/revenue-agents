@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="48" viewBox="0 0 260 48">
+  <rect x="2" y="6" width="36" height="36" rx="9" fill="#4F46E5"/>
+  <circle cx="14" cy="18" r="3.5" fill="#FFFFFF"/>
+  <circle cx="26" cy="18" r="3.5" fill="#FFFFFF"/>
+  <circle cx="20" cy="30" r="3.5" fill="#FFFFFF"/>
+  <path d="M14 18 L26 18 L20 30 Z" fill="none" stroke="#FFFFFF" stroke-width="1.6" stroke-opacity="0.7"/>
+  <text x="48" y="24" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="17" font-weight="700" fill="#111827">Revenue Agents</text>
+  <text x="48" y="40" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="11.5" fill="#6B7280">Cool AI · agentic revenue system</text>
+</svg>

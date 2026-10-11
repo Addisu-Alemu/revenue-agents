@@ -175,7 +175,7 @@ class Lesson(Model):
 
     id: str
     segment: str
-    source: str  # "call" or "reply"
+    source: str  # "call", "reply" or "review" (a human's feedback on a draft)
     source_id: str  # e.g. the transcript or reply id, so every lesson is traceable
     text: str
     applies_to: list[str] = Field(default_factory=lambda: ["outreach", "call_brief"])

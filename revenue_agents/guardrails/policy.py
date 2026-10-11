@@ -67,7 +67,9 @@ AGENT_PERMISSIONS: dict[str, frozenset[ActionType]] = {
     "deal_desk": frozenset(
         {ActionType.DRAFT_IO, ActionType.SEND_PRICING, ActionType.SEND_IO, ActionType.SEND_FOR_SIGNATURE}
     ),
-    "orchestrator": frozenset({ActionType.UPDATE_DEAL, ActionType.FLAG_DEAL, ActionType.CLOSE_DEAL}),
+    "orchestrator": frozenset(
+        {ActionType.UPDATE_DEAL, ActionType.FLAG_DEAL, ActionType.CLOSE_DEAL, ActionType.RECORD_LESSON}
+    ),
 }
 
 # High-risk actions: always need a human, whatever the tier or segment.
