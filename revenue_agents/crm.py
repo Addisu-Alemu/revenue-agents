@@ -112,7 +112,7 @@ class MockHubSpot:
     def _read(self) -> dict[str, Any]:
         state = read_json(self._path, None)
         if state is None:
-            leads = json.loads(self._seed_leads.read_text())
+            leads = json.loads(self._seed_leads.read_text(encoding="utf-8"))
             state = {"leads": {lead["id"]: lead for lead in leads}, "deals": {}, "activities": []}
         return state
 

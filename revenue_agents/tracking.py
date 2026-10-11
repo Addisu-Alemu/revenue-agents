@@ -26,7 +26,8 @@ CLOSED = (Stage.HANDOFF, Stage.CLOSED_LOST)
 
 # Flags a human should look at. Informational flags (e.g. meeting_requested) are left out.
 ATTENTION_FLAGS = ("pricing_requested", "possible_prompt_injection", "objection", "unsubscribe", "io_blocked",
-                   "outreach_draft_rejected", "unknown_product_mentioned", "check_flight_dates")
+                   "outreach_draft_rejected", "unknown_product_mentioned", "check_flight_dates",
+                   "reply_without_outreach", "needs_manual_email", "signature_unconfirmed", "signature_mismatch")
 
 
 class StalledDeal(Model):

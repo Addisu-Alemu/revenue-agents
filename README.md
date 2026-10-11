@@ -6,17 +6,35 @@ Design: [docs/DESIGN.md](docs/DESIGN.md)
 
 > **Status: in progress.** Built so far: the full vertical slice for the brand segment (data models, segment config packs, enrichment and scoring, the autonomy policy with action gateway, approval queue, audit log and kill switch, the LLM layer, all six agents, mock HubSpot, the lesson store, the orchestrator with stage exit criteria, and the demo run), plus a second segment, agencies, added through `segments/agency.yaml` alone. It also covers tracking (stall detection, reminders, daily digest) and e-signature through to handoff. Next: the UI.
 
-## Setup
+## Quick start with Docker (any OS: Windows, macOS, Linux)
 
-Requires **Python 3.10+** (developed on 3.11) and an **Anthropic API key**.
+Needs only [Docker](https://docs.docker.com/get-docker/). No Python setup.
+
+```bash
+docker compose up --build            # UI at http://localhost:8501
+```
+
+```bash
+docker compose run --rm app python run_demo.py --auto-approve     # terminal demo
+docker compose run --rm app pytest                                # tests
+docker compose exec app python scripts/kill_switch.py on --reason "Investigating"   # while the UI runs
+```
+
+- **API key (optional, only for `--llm claude` / the "claude" model in the UI):** put `ANTHROPIC_API_KEY=...` in a `.env` file next to `docker-compose.yml`. Compose passes it in at run time; it is never copied into the image (`.dockerignore`).
+- **State** (deals, approvals, lessons, audit log) lives in a Docker volume, so it survives restarts. `docker compose down -v` deletes it.
+- The container runs as a normal user, not root, and has a health check.
+
+## Setup (without Docker)
+
+Requires **Python 3.10+** (developed on 3.11). Works on Windows, macOS and Linux. An **Anthropic API key** is only needed for the real model (`--llm claude`); the default fake mode needs none.
 
 ```bash
 git clone https://github.com/Addisu-Alemu/revenue-agents.git
 cd revenue-agents
 
-# Create and activate a virtual environment (uv shown; `python3.11 -m venv .venv` works too)
+# Create and activate a virtual environment (uv shown; `python -m venv .venv` works too)
 uv venv -p 3.11 .venv
-source .venv/bin/activate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
 # Install dependencies
 uv pip install -r requirements.txt

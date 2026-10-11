@@ -1,0 +1,17 @@
+# docker compose up --build        -> UI at http://localhost:8501
+# docker compose run --rm app python run_demo.py
+# docker compose run --rm app pytest
+services:
+  app:
+    build: .
+    image: revenue-agents
+    ports:
+      - "8501:8501"
+    env_file:
+      - path: .env          # ANTHROPIC_API_KEY for --llm claude; optional (fake mode needs no key)
+        required: false
+    volumes:
+      - state:/app/state    # deals, approvals, lessons, audit log survive restarts
+
+volumes:
+  state:

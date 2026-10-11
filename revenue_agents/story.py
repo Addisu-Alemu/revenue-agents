@@ -38,7 +38,7 @@ class Step:
 
 
 def load_replies() -> list[Reply]:
-    return [Reply.model_validate(item) for item in json.loads((DATA_DIR / "replies.json").read_text())]
+    return [Reply.model_validate(item) for item in json.loads((DATA_DIR / "replies.json").read_text(encoding="utf-8"))]
 
 
 def load_transcripts() -> dict[str, Path]:
@@ -130,7 +130,7 @@ def reply_event(reply: Reply) -> Event:
 
 def call_event(lead: Lead, transcript: Path) -> Event:
     return Event(id=f"call:{transcript.stem}", type=EventType.CALL_COMPLETED,
-                 payload={"lead_id": lead.id, "transcript_id": transcript.stem, "transcript": transcript.read_text()})
+                 payload={"lead_id": lead.id, "transcript_id": transcript.stem, "transcript": transcript.read_text(encoding="utf-8")})
 
 
 def signature_event(envelope_id: str) -> Event:

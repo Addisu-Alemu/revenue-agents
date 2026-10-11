@@ -15,7 +15,8 @@ while paused; the gateway guarantees nothing executes.
     lead.created     -> research -> scoring -> outreach (Tier A waits for approval)
     approval.decided -> execute the approved action; a rejected email with a note is redrafted
                         (max 2 redrafts), and the note can be saved as a lesson
-    reply.received   -> reply triage -> flags (meeting / pricing / injection / unsubscribe)
+    reply.received   -> reply triage -> flags (meeting / pricing / injection / unsubscribe); a reply from a
+                        lead we never emailed is flagged and doesn't move the deal
     call.completed   -> call intel -> qualified? -> deal desk drafts IO (sending waits for approval)
     signature.completed -> verify the envelope with the e-sign provider -> close won -> handoff
     sla.check        -> flag stalled deals and remind the rep (once per deal and stage)
@@ -267,6 +268,18 @@ class Orchestrator:
         steps = [f"Reply {reply.id} from {lead.contact.name}: {triage.classification.intent}"]
         if triage.flags:
             steps.append(f"Flags: {', '.join(triage.flags)}")
+
+        emailed = any(activity.kind == "email_sent" for activity in self._crm.timeline(deal.id))
+        if not emailed:
+            # We never emailed this lead, so this can't be a reply to us: a data error, a misrouted
+            # thread, or a spoofed message. Record and flag it, learn nothing, don't move the deal.
+            actions = [a for a in result.actions if a.type is not ActionType.RECORD_LESSON]
+            steps += self._submit(actions)
+            steps += self._flag(deal, "reply_without_outreach", f"{reply.id} arrived but we never emailed {lead.contact.name}")
+            if "unsubscribe" in triage.flags:  # always honour an unsubscribe
+                steps += self._advance(deal.id, Stage.CLOSED_LOST, reason="contact unsubscribed")
+            return steps + ["Reply without outreach: flagged for a human, stage unchanged, nothing learned"]
+
         steps += self._submit(result.actions)
         steps += self._advance(deal.id, Stage.REPLIED)
 

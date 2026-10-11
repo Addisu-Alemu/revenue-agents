@@ -22,11 +22,11 @@ class KillSwitch:
     def reason(self) -> str:
         if not self.is_engaged():
             return ""
-        return self._path.read_text().strip() or "no reason given"
+        return self._path.read_text(encoding="utf-8").strip() or "no reason given"
 
     def engage(self, reason: str) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(reason)
+        self._path.write_text(reason, encoding="utf-8")
 
     def release(self) -> None:
         self._path.unlink(missing_ok=True)

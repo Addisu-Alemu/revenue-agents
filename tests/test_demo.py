@@ -40,9 +40,9 @@ def test_rejecting_in_the_prompt_sends_nothing(tmp_path):
 
     assert code == 0
     assert "Rejected by demo-reviewer@cool.example: send_email:D-001:first_touch" in output
-    # BrightBite never reaches "outreach": no email was sent (the scripted reply still arrives later)
-    assert "Stage scored -> replied" in output
-    assert "Stage scored -> outreach\n" not in output.split("=== 2.")[0]
+    # No email was sent, so Maya's scripted reply can't be a reply to us: flagged, stage unchanged
+    assert "Reply without outreach: flagged for a human, stage unchanged, nothing learned" in output
+    assert "Stage scored -> replied" not in output
 
 
 def test_demo_starts_fresh_each_time(tmp_path):

@@ -310,3 +310,25 @@ def test_missing_criteria_are_named(make_deal):
                                                       "decision_maker"]
     assert missing_for(Stage.HANDOFF, deal, []) == ["a signed IO"]
     assert missing_for(Stage.CLOSED_LOST, deal, []) == []
+
+
+# --- Reply without outreach -------------------------------------------------------------
+
+
+def test_reply_from_a_lead_we_never_emailed_is_flagged_not_progressed(system, replies):
+    system.orchestrator.handle(lead_created("L-001"))  # Tier A: email waits, nothing sent
+    report = system.orchestrator.handle(reply(replies, "R-001"))
+
+    deal = system.crm.get_deal("D-001")
+    assert deal.stage is Stage.SCORED
+    assert "reply_without_outreach" in deal.flags
+    assert system.lessons.all() == []  # nothing learned from it
+    assert report.steps[-1] == "Reply without outreach: flagged for a human, stage unchanged, nothing learned"
+    assert [a.kind for a in system.crm.timeline("D-001")].count("reply") == 1  # still recorded
+
+
+def test_unsubscribe_is_honoured_even_without_outreach(tmp_path, llm, replies):
+    system = build_system(FakeLLM({**llm.responses, "ReplyClassification": UNSUBSCRIBE}), state_dir=tmp_path)
+    system.orchestrator.handle(lead_created("L-001"))
+    system.orchestrator.handle(reply(replies, "R-001"))
+    assert stage(system) is Stage.CLOSED_LOST
