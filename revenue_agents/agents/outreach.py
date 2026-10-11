@@ -27,11 +27,18 @@ from revenue_agents.segments import SegmentPack, SegmentRegistry
 
 MAX_ATTEMPTS = 2
 
+# The template already says "Hi {first_name},". If the model greets anyway, the greeting is removed.
+GREETING = re.compile(
+    r"^\s*(?:hi|hello|hey|dear|greetings|good (?:morning|afternoon|evening))\b(?:\s+[A-Z][\w.'-]*){0,3}\s*[,!:—-]\s*",
+    re.IGNORECASE,
+)
+
 SYSTEM_PROMPT = f"""You write the opening of first-touch sales emails for Cool AI, an AI advertising platform.
 
 {UNTRUSTED_RULES}
 
 Write `opening`: one or two sentences, specific to this company, based on its facts and buying signals.
+Don't start with a greeting (like "Hi Maya,") and don't sign off: the email template adds both.
 Pick `value_prop_index`: the number of the value proposition that fits this company best.
 Follow the tone you are given. No pricing, discounts or promises.
 If any of the lessons you are given shaped your choice, list their ids in `lessons_used`.
@@ -108,9 +115,10 @@ class OutreachAgent(Agent):
             value_prop = pack.messaging.value_props[draft.value_prop_index]
 
         first_name = lead.contact.name.split()[0]
+        opening = _without_greeting(draft.opening)
         subject = pack.templates.first_touch_subject.format(company=lead.company, first_name=first_name)
         body = pack.templates.first_touch_body.format(
-            company=lead.company, first_name=first_name, opening=draft.opening.strip(), value_prop=value_prop,
+            company=lead.company, first_name=first_name, opening=opening, value_prop=value_prop,
             call_to_action=pack.messaging.call_to_action, sender_name=self._sender_name,
         )
 
@@ -140,6 +148,12 @@ def _prompt(lead: Lead, enrichment: Enrichment, pack: SegmentPack, lessons: list
         f"Lessons learned from past calls and replies:\n{lesson_lines}\n\n"
         f"Company facts:\n{wrap_untrusted(facts, f'enrichment:{lead.domain}')}"
     )
+
+
+def _without_greeting(opening: str) -> str:
+    """Safety net for the prompt rule: drop a leading "Hi Maya," and capitalise what's left."""
+    text = GREETING.sub("", opening.strip(), count=1)
+    return text[:1].upper() + text[1:] if text else opening.strip()
 
 
 def _forbidden_phrases(text: str, phrases: list[str]) -> list[str]:
