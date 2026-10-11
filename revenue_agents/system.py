@@ -11,6 +11,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from revenue_agents.agents.call_brief import CallBriefAgent
 from revenue_agents.agents.call_intel import CallIntelAgent
 from revenue_agents.agents.deal_desk import DealDeskAgent
 from revenue_agents.agents.outreach import OutreachAgent
@@ -34,6 +35,7 @@ from revenue_agents.orchestrator import Agents, Orchestrator
 from revenue_agents.segments import SEGMENTS_DIR, SegmentRegistry
 from revenue_agents.skills.enrichment import JsonEnricher
 from revenue_agents.storage import STATE_DIR
+from revenue_agents.tracing import TracedAgent, Tracer, TracingLLM
 from revenue_agents.tracking import Tracker
 
 
@@ -48,6 +50,7 @@ class System:
     segments: SegmentRegistry
     gateway: ActionGateway
     orchestrator: Orchestrator
+    tracer: Tracer
 
 
 def build_system(llm: LLM, state_dir: Path = STATE_DIR, segments_dir: Path = SEGMENTS_DIR) -> System:
@@ -60,23 +63,31 @@ def build_system(llm: LLM, state_dir: Path = STATE_DIR, segments_dir: Path = SEG
     kill_switch = KillSwitch(state_dir / "KILL_SWITCH")
     esign = MockESign(state_dir / "esign.json")
 
+    tracer = Tracer(state_dir / "traces.jsonl")
+    llm = TracingLLM(llm, tracer)
     claims = ActionClaims(state_dir / "claims")
     gateway = ActionGateway(
         AutonomyPolicy(segments, kill_switch), approvals, audit, ActionHandlers(crm, lessons, esign).as_dict(), claims,
+        tracer,
     )
+
+    def traced(agent):
+        return TracedAgent(agent, tracer)
+
     agents = Agents(
-        research=ResearchAgent(JsonEnricher()),
-        scoring=ScoringAgent(segments),
-        outreach=OutreachAgent(llm, segments),
-        reply_triage=ReplyTriageAgent(llm),
-        call_intel=CallIntelAgent(llm, segments),
-        deal_desk=DealDeskAgent(segments),
+        research=traced(ResearchAgent(JsonEnricher())),
+        scoring=traced(ScoringAgent(segments)),
+        outreach=traced(OutreachAgent(llm, segments)),
+        reply_triage=traced(ReplyTriageAgent(llm)),
+        call_brief=traced(CallBriefAgent(segments)),
+        call_intel=traced(CallIntelAgent(llm, segments)),
+        deal_desk=traced(DealDeskAgent(segments)),
     )
     held = HeldEvents(state_dir / "held_events.json")
     tracker = Tracker(crm, approvals, lessons, segments, claims, state_dir / "digests", held)
     orchestrator = Orchestrator(crm, lessons, gateway, approvals, audit, segments, agents,
-                                ActionClaims(state_dir / "events"), tracker, esign, kill_switch, held)
-    return System(crm, esign, lessons, approvals, audit, kill_switch, segments, gateway, orchestrator)
+                                ActionClaims(state_dir / "events"), tracker, esign, kill_switch, held, tracer)
+    return System(crm, esign, lessons, approvals, audit, kill_switch, segments, gateway, orchestrator, tracer)
 
 
 def make_llm(mode: str) -> LLM:

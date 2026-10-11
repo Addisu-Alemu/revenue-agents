@@ -13,7 +13,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from revenue_agents.ui import components, context
-from revenue_agents.ui.pages import approvals, deal_detail, demo_control, pipeline
+from revenue_agents.ui.pages import agent_trace, approvals, deal_detail, demo_control, pipeline
 
 ASSETS = Path(__file__).resolve().parent / "assets"
 
@@ -26,6 +26,7 @@ components.inject_css()
 st.session_state.pages = {
     "demo": st.Page(demo_control.render, title="Live demo", icon=":material/play_circle:", url_path="demo",
                     default=True),
+    "trace": st.Page(agent_trace.render, title="Agent trace", icon=":material/account_tree:", url_path="trace"),
     "pipeline": st.Page(pipeline.render, title="Pipeline", icon=":material/view_kanban:", url_path="pipeline"),
     "deal": st.Page(deal_detail.render, title="Deal detail", icon=":material/person_search:", url_path="deal"),
     "approvals": st.Page(approvals.render, title="Approvals", icon=":material/fact_check:", url_path="approvals"),
@@ -43,6 +44,7 @@ with st.sidebar:
     else:
         st.badge("Live Claude", icon=":material/bolt:", color="green")
     st.text_input("Reviewer (you)", key="reviewer", help="Recorded on every approval decision.")
+    context.remember_settings()
     waiting = len(system.approvals.pending())
     if waiting:
         st.warning(f"{waiting} waiting for approval", icon=":material/front_hand:")
@@ -50,7 +52,7 @@ with st.sidebar:
         st.error(f"Kill switch ON: {system.kill_switch.reason()}", icon=":material/power_settings_new:")
 
 st.navigation({
-    "Run": [pages["demo"]],
+    "Run": [pages["demo"], pages["trace"]],
     "Sales": [pages["pipeline"], pages["deal"]],
     "Human in the loop": [pages["approvals"]],
 }).run()

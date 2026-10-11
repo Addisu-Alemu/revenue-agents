@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import re
+
 import streamlit as st
 
 from revenue_agents import story
 from revenue_agents.crm import Activity
-from revenue_agents.guardrails.approvals import ApprovalRequest
+from revenue_agents.guardrails.approvals import ApprovalRequest, ApprovalStatus
 from revenue_agents.guardrails.policy import ActionType
 from revenue_agents.models import Deal, LeadScore, Stage
 from revenue_agents.stages import ORDER
 from revenue_agents.system import System
 from revenue_agents.tracking import ATTENTION_FLAGS
-from revenue_agents.ui import context
+from revenue_agents.ui import agent_views, context
 
 TIER_COLORS = {"A": "green", "B": "blue", "C": "gray"}
 STAGE_LABELS = {
@@ -24,7 +26,7 @@ ACTIVITY_ICONS = {
     "email_sent": ":material/mail:", "reply": ":material/reply:", "flag": ":material/flag:",
     "note": ":material/sticky_note_2:", "stage_change": ":material/trending_flat:", "document": ":material/description:",
     "io_sent": ":material/send:", "signed": ":material/draw:", "handoff": ":material/handshake:",
-    "reminder": ":material/alarm:",
+    "reminder": ":material/alarm:", "call_brief": ":material/assignment:",
 }
 
 CSS = """
@@ -167,12 +169,18 @@ def approval_card(system: System, request: ApprovalRequest, key: str) -> None:
 def _decide(system: System, request: ApprovalRequest, approved: bool, note: str, save_lesson: bool = False) -> None:
     reviewer = st.session_state.reviewer
     event = story.approval_event(request.id, approved, reviewer, note.strip() or None, save_lesson)
-    try:
-        lines = system.orchestrator.handle(event).steps
-    except Exception as error:  # show it, never crash: the decision is recorded and can be retried with Run now
-        st.error(f"{'Approval' if approved else 'Rejection'} could not complete: {type(error).__name__}: {error}")
-        return
-    context.log(f"{'Approved' if approved else 'Rejected'}: {request.action.summary}", lines)
+    start = system.tracer.count()
+    with st.status("Approving…" if approved else "Rejecting…", expanded=True) as status:
+        try:
+            with system.tracer.listening(agent_views.LiveProgress()):
+                lines = system.orchestrator.handle(event).steps
+        except Exception as error:  # show it, never crash: the decision is recorded and can be retried with Run now
+            status.update(label="Could not complete", state="error")
+            st.error(f"{'Approval' if approved else 'Rejection'} could not complete: {type(error).__name__}: {error}")
+            return
+        status.update(label="Done", state="complete")
+    context.log(f"{'Approved' if approved else 'Rejected'}: {request.action.summary}", lines,
+                (start, system.tracer.count()))
     st.rerun()
 
 
@@ -184,12 +192,13 @@ def waiting_card(system: System, request: ApprovalRequest, key: str) -> None:
                    + (" · kill switch is ON" if system.kill_switch.is_engaged() else ""))
         if st.button("Run now", key=f"{key}-run", icon=":material/play_arrow:",
                      disabled=system.kill_switch.is_engaged()):
+            start = system.tracer.count()
             try:
                 lines = system.orchestrator.run_approved(request.id)
             except Exception as error:
                 st.error(f"Could not run: {type(error).__name__}: {error}")
                 return
-            context.log(f"Run now: {request.action.summary}", lines)
+            context.log(f"Run now: {request.action.summary}", lines, (start, system.tracer.count()))
             st.rerun()
 
 
@@ -214,6 +223,8 @@ def styled_line(line: str) -> str:
         return f":material/flag: :orange[{text}]"
     if text.startswith(("Lesson", "Draft uses lessons")):
         return f":material/psychology: :blue[{text}]"
+    if text.startswith("Call brief"):
+        return f":material/assignment: :blue[**{text}**] (see Deal detail → Call brief)"
     if text.startswith(("Already handled", "Same webhook")):
         return f":material/content_copy: :gray[{text}]"
     if "→ executed" in text or text.startswith(("Approved", "Closed won")):
@@ -221,15 +232,175 @@ def styled_line(line: str) -> str:
     return text
 
 
-def log_entries(limit: int | None = None) -> None:
+BRIEF_LINE = re.compile(r"^Call brief ready for the rep: (.+?), meeting with")
+
+
+def log_entries(system: System, limit: int | None = None) -> None:
     """Newest event open; older ones collapsed. Digest text is shown as a block, keeping its layout."""
     for index, entry in enumerate(st.session_state.log[:limit]):
         container = st.container(border=True) if index == 0 else st.expander(entry.title)
+        steps = system.tracer.spans()[entry.trace[0]:entry.trace[1]] if entry.trace else []
         with container:
-            if index == 0:
-                st.markdown(f"**{entry.title}**")
             digest_at = next((i for i, line in enumerate(entry.lines) if line.startswith("Daily digest")), None)
             lines = entry.lines if digest_at is None else entry.lines[:digest_at]
-            st.markdown("  \n".join(styled_line(line) for line in lines if line))
+            narrative = "  \n".join(styled_line(line) for line in lines if line)
+            if index == 0:
+                st.markdown(f"**{entry.title}**")
+                if any(span.kind == "agent" for span in steps):
+                    agent_views.progress_view(steps)  # which agents worked, and their results
+                    with st.expander("Step-by-step log"):
+                        st.markdown(narrative)
+                else:
+                    st.markdown(narrative)
+            else:
+                st.markdown(narrative)
             if digest_at is not None:
                 st.code("\n".join(entry.lines[digest_at:]), language=None)
+            _call_brief_preview(system, entry, key=f"log-{index}")
+            if entry.trace and entry.trace[1] > entry.trace[0]:
+                steps = system.tracer.spans()[entry.trace[0]:entry.trace[1]]
+                if st.button(f"Agent trace ({len(steps)} steps)", key=f"log-{index}-trace", icon=":material/account_tree:",
+                             type="tertiary"):
+                    _trace_dialog(entry.title, steps)
+
+
+def _call_brief_preview(system: System, entry, key: str) -> None:
+    """If this event prepared a call brief, show it right here, with a shortcut to the deal."""
+    match = next((m for line in entry.lines if (m := BRIEF_LINE.match(line))), None)
+    if match is None:
+        return
+    deal = next((d for d in system.crm.deals() if system.crm.get_lead(d.lead_id).company == match.group(1)), None)
+    briefs = [a for a in system.crm.timeline(deal.id) if a.kind == "call_brief"] if deal else []
+    if not briefs:
+        return
+    with st.expander("View call brief", icon=":material/assignment:"):
+        st.markdown(briefs[-1].data["markdown"].replace("$", "\\$"))
+    pages = st.session_state.get("pages", {})
+    if "deal" in pages and st.button("Open deal", key=f"{key}-open", icon=":material/arrow_forward:", type="tertiary"):
+        st.session_state.selected_deal = deal.id
+        st.switch_page(pages["deal"])
+
+
+# --- Agent trace ------------------------------------------------------------------------------
+
+AGENT_LABELS = {
+    "research": "Research agent", "scoring": "Scoring agent", "outreach": "Outreach agent",
+    "reply_triage": "Reply triage agent", "call_brief": "Call brief agent", "call_intel": "Call intel agent",
+    "deal_desk": "Deal desk agent",
+}
+DECISION_COLORS = {"auto": "green", "needs_approval": "orange", "blocked": "red"}
+
+
+@st.dialog("Agent trace", width="large")
+def _trace_dialog(title: str, spans: list) -> None:
+    st.caption(title)
+    trace_view(spans)
+
+
+def trace_view(spans: list) -> None:
+    """Each agent with the model calls it made, then the policy decision, execution and stage change for each action."""
+    pending_llm = []
+    for span in spans:
+        if span.kind == "llm":
+            pending_llm.append(span)  # recorded before its agent finishes: shown inside that agent
+        elif span.kind == "agent":
+            _agent_step(span, pending_llm)
+            pending_llm = []
+        elif span.kind == "policy":
+            decision = span.data["decision"].split(" ")[0]
+            st.markdown(f":material/policy: **Policy** · `{span.name}` → "
+                        f":{DECISION_COLORS.get(decision, 'gray')}[**{span.data['decision']}**] "
+                        f"<span class='ra-muted'>[{span.data['rule']}] {span.data['reason']}</span>",
+                        unsafe_allow_html=True)
+        elif span.kind == "action":
+            st.markdown(f":material/check_circle: :green[Executed `{span.name}`] "
+                        f"<span class='ra-muted'>({span.data['action_id']})</span>", unsafe_allow_html=True)
+        elif span.kind == "stage":
+            moved = span.data["from"] != span.data["to"]
+            text = f"Stage {span.data['from']} → {span.data['to']}" if moved else f"Stage stays {span.data['from']}"
+            st.markdown(f":material/trending_flat: :violet[**{text}**] <span class='ra-muted'>({span.data['why']})</span>",
+                        unsafe_allow_html=True)
+    for span in pending_llm:  # a model call whose agent failed
+        _llm_call(span)
+
+
+def _agent_step(span, llm_calls: list) -> None:
+    with st.container(border=True):
+        label = AGENT_LABELS.get(span.name, span.name)
+        uses_ai = " · uses AI" if llm_calls else " · no AI (plain code)"
+        st.markdown(f":material/smart_toy: **{label}**{uses_ai} <span class='ra-muted'>· {span.duration_ms} ms</span>",
+                    unsafe_allow_html=True)
+        st.caption("Input: " + ", ".join(span.data.get("inputs", [])))
+        for call in llm_calls:
+            _llm_call(call)
+        if "error" in span.data:
+            st.error(span.data["error"])
+            return
+        with st.expander("Output (what the agent returned)"):
+            st.json(span.data.get("output"), expanded=False)
+        proposed = span.data.get("proposed", [])
+        st.markdown(":material/outgoing_mail: **Proposed:** " + (", ".join(f"`{p}`" for p in proposed) or "nothing"))
+
+
+def _llm_call(span) -> None:
+    data = span.data
+    cost = f" · ${data['cost_usd']:.4f}" if data.get("cost_usd") is not None else ""
+    st.markdown(f":material/psychology: **Model call** `{data['schema']}` · {data['model']} "
+                f"<span class='ra-muted'>· {span.duration_ms} ms{cost}</span>", unsafe_allow_html=True)
+    with st.expander("Prompt sent to the model"):
+        st.code(f"SYSTEM:\n{data['system']}\n\nUSER:\n{data['prompt']}", language=None, wrap_lines=True)
+    if "error" in data:
+        st.error(data["error"])
+    else:
+        with st.expander("Model's raw answer (before our code checks it)"):
+            st.json(data["answer"])
+
+
+# --- Conversation ------------------------------------------------------------------------------
+
+
+def conversation(system: System, deal: Deal) -> None:
+    """The deal's email thread, both ways, like an email app, with the agents' notes on each reply."""
+    lead = system.crm.get_lead(deal.lead_id)
+    messages = sorted(system.crm.messages(deal.id), key=lambda message: message.at)
+    drafts = [r for r in system.approvals.pending() if r.action.deal_id == deal.id
+              and r.action.type is ActionType.SEND_EMAIL]
+    if not messages and not drafts:
+        st.caption("No emails yet. The first email appears here once it is sent (Tier A waits for approval first).")
+        return
+
+    for message in messages:
+        outbound = message.direction == "outbound"
+        who = "Daniel Reyes · Cool AI" if outbound else f"{lead.contact.name} · {lead.company}"
+        with st.chat_message("assistant" if outbound else "user",
+                             avatar=":material/send:" if outbound else ":material/person:"):
+            st.markdown(f"**{who}** <span class='ra-muted'>· {message.at:%b %d, %H:%M} · "
+                        f"{'sent' if outbound else 'received'}</span>", unsafe_allow_html=True)
+            st.markdown(f"**Subject:** {_escape(message.subject)}")
+            body = _escape(message.body.strip().replace("<", "&lt;"))
+            st.markdown(f"<div class='ra-email'>{body}</div>", unsafe_allow_html=True)
+            if outbound:
+                request = next((r for r in system.approvals.all() if r.id == message.meta.get("action_id")), None)
+                note = (f"approved by {request.decided_by}" if request and request.status is ApprovalStatus.APPROVED
+                        else "sent automatically (policy: low risk)")
+                lessons = message.meta.get("lessons_used") or []
+                st.caption(f":material/verified_user: {note}" + (f" · shaped by lessons: {', '.join(lessons)}"
+                                                                  if lessons else ""))
+            else:
+                meta = message.meta
+                linked = f"answers {message.in_reply_to}" if message.in_reply_to else "not linked to any email we sent"
+                st.caption(f":material/smart_toy: Reply triage: **{meta.get('intent')}** · "
+                           f"flags: {', '.join(meta.get('flags', [])) or 'none'} · {linked}")
+                if meta.get("suggested_next_step"):
+                    st.caption(f":material/lightbulb: Next step: {meta['suggested_next_step']}")
+
+    for request in drafts:
+        with st.chat_message("assistant", avatar=":material/edit_note:"):
+            st.markdown("**Draft waiting for approval** <span class='ra-muted'>· not sent</span>",
+                        unsafe_allow_html=True)
+            email_card(request.action.payload)
+
+
+def _escape(text: str) -> str:
+    """Streamlit treats $...$ as a maths formula; show dollar signs as text."""
+    return text.replace("$", "\\$")

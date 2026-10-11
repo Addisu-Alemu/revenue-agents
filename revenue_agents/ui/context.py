@@ -21,18 +21,33 @@ from revenue_agents.guardrails.claims import ActionClaims
 from revenue_agents.guardrails.policy import ActionType
 from revenue_agents.system import System, build_system, make_llm, reset_state
 
-DEFAULTS = {"segment": "brand", "llm_mode": "fake", "reviewer": "you@cool.example", "log": []}
+DEFAULTS = {"segment": "brand", "llm_mode": "fake", "reviewer": "you@cool.example"}
 
 
 @dataclass
 class LogEntry:
     title: str
     lines: list[str]
+    trace: tuple[int, int] | None = None  # which recorded trace steps belong to this entry
+
+
+# Sidebar settings. Streamlit can drop a widget's value when you switch pages, so each one has a
+# saved copy that is restored before the widget is drawn, and refreshed after.
+SETTINGS = ("segment", "llm_mode", "reviewer")
 
 
 def init_session() -> None:
-    for key, value in DEFAULTS.items():
-        st.session_state.setdefault(key, list(value) if isinstance(value, list) else value)
+    st.session_state.setdefault("log", [])
+    for key in SETTINGS:
+        st.session_state.setdefault(f"saved_{key}", DEFAULTS[key])
+        if key not in st.session_state:  # first visit, or Streamlit dropped it on a page change
+            st.session_state[key] = st.session_state[f"saved_{key}"]
+
+
+def remember_settings() -> None:
+    """Call after the sidebar widgets: keeps the user's choices across pages."""
+    for key in SETTINGS:
+        st.session_state[f"saved_{key}"] = st.session_state[key]
 
 
 def state_dir() -> Path:
@@ -48,8 +63,8 @@ def reset() -> None:
     st.session_state.log = []
 
 
-def log(title: str, lines: list[str]) -> None:
-    st.session_state.log.insert(0, LogEntry(title, lines))
+def log(title: str, lines: list[str], trace: tuple[int, int] | None = None) -> None:
+    st.session_state.log.insert(0, LogEntry(title, lines, trace))
 
 
 # --- Story progress ---------------------------------------------------------------------

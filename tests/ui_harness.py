@@ -3,9 +3,9 @@
 import streamlit as st
 
 from revenue_agents.ui import components, context
-from revenue_agents.ui.pages import approvals, deal_detail, demo_control, pipeline
+from revenue_agents.ui.pages import agent_trace, approvals, deal_detail, demo_control, pipeline
 
-PAGES = {"demo": demo_control.render, "pipeline": pipeline.render, "deal": deal_detail.render,
+PAGES = {"demo": demo_control.render, "trace": agent_trace.render, "pipeline": pipeline.render, "deal": deal_detail.render,
          "approvals": approvals.render}
 
 context.init_session()

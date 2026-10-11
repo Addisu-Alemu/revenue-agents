@@ -188,3 +188,120 @@ def test_reject_and_redraft_from_the_ui_with_a_lesson(isolated_state):
     assert [r.id for r in system.approvals.pending()] == ["send_email:D-001:first_touch:v2"]
     assert system.lessons.all()[0].source == "review"
     assert any("(draft v2, after review)" in m.value for m in at.markdown)
+
+
+def test_deal_page_shows_the_call_brief(isolated_state):
+    full_story(isolated_state)
+    deal = page("deal")
+    assert not deal.exception
+    assert any("Call brief: BrightBite Burgers" in m.value for m in deal.markdown)
+
+
+def test_call_brief_is_visible_in_the_log_with_a_shortcut_to_the_deal():
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
+    button(at, "Next: New lead: BrightBite").click().run()
+    button(at, "Approve").click().run()
+    button(at, "Next: Reply R-001").click().run()
+
+    assert not at.exception
+    assert "View call brief" in [e.label for e in at.expander]
+    assert any("Questions to ask" in m.value for m in at.markdown)
+
+    button(at, "Open deal").click().run()
+    assert not at.exception
+    assert at.session_state["selected_deal"] == "D-001"
+
+
+def test_choosing_claude_in_the_sidebar_sticks():
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
+    at.session_state["llm_mode"] = "claude"  # the user clicks "claude"
+    at.run()
+    assert at.session_state["llm_mode"] == "claude"
+    assert at.session_state["saved_llm_mode"] == "claude"
+
+
+def test_sidebar_choices_come_back_if_streamlit_drops_them(monkeypatch):
+    """Streamlit can drop a widget's value on a page change; the saved copy brings it back,
+    while a value that is still there (a choice just made) is left alone."""
+    from revenue_agents.ui import context
+
+    state = {"saved_llm_mode": "claude", "saved_segment": "agency", "segment": "brand"}  # llm_mode was dropped
+    monkeypatch.setattr(context.st, "session_state", state)
+    context.init_session()
+
+    assert state["llm_mode"] == "claude"  # restored from the saved copy
+    assert state["segment"] == "brand"  # kept: the user just chose it
+    assert state["reviewer"] == "you@cool.example"  # first visit: default
+
+
+def test_agent_trace_page_shows_an_event_step_by_step(isolated_state):
+    full_story(isolated_state)
+    at = page("trace")
+    assert not at.exception
+    assert at.title[0].value == "Agent trace"
+    options = at.selectbox[0].options
+    assert any(option.startswith("lead:L-001 · ") for option in options)
+    assert any(option.startswith("reply:R-001 · ") and "1 model call(s)" in option for option in options)
+
+    at.selectbox[0].select(next(o for o in options if o.startswith("reply:R-001"))).run()
+    assert any("Reply triage agent" in m.value for m in at.markdown)
+    assert "Prompt sent to the model" in [e.label for e in at.expander]
+
+
+def test_trace_button_opens_the_trace_for_a_step(isolated_state):
+    at = page("demo")
+    button(at, "Next: New lead: BrightBite").click().run()
+    button(at, "Agent trace").click().run()
+    assert not at.exception
+    assert any("Research agent" in m.value for m in at.markdown)
+    assert any("needs_approval" in m.value for m in at.markdown)
+
+
+def test_empty_trace_page_explains_itself():
+    at = page("trace")
+    assert not at.exception
+    assert at.info[0].value.startswith("No trace yet")
+
+
+def test_demo_page_shows_agents_and_the_map_after_a_step():
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
+    button(at, "Next: New lead: BrightBite").click().run()
+
+    assert not at.exception
+    text = "\n".join(m.value for m in at.markdown)
+    assert "**Research agent** (code) · 420 locations" in text
+    assert "**Scoring agent** (code) · 97.0 · Tier A" in text
+    assert "Policy: needs approval" in text
+    assert "Who worked on the last step" in [h.value for h in at.subheader]
+    assert at.get("graphviz_chart")
+
+
+def test_trace_page_has_the_agent_team_scorecards(isolated_state):
+    full_story(isolated_state)
+    at = page("trace")
+    assert "The agent team" in [h.value for h in at.subheader]
+    text = "\n".join(m.value for m in at.markdown)
+    assert "**Reply triage**" in text and ":violet-badge[AI]" in text
+    captions = [c.value for c in at.caption]
+    assert "Last: 0.0 · Tier C" in captions  # the scoring agent's latest run: Pebble & Pine
+    assert "Hasn't run yet" not in captions  # every agent worked during the full story
+
+
+def test_conversation_tab_shows_the_thread_and_the_agents_notes(isolated_state):
+    full_story(isolated_state)
+    deal = page("deal")
+    assert not deal.exception
+    text = "\n".join(m.value for m in deal.markdown)
+    assert "**Daniel Reyes · Cool AI**" in text
+    assert "**Maya Thompson · BrightBite Burgers**" in text
+    assert "I'd like our CFO, Ken, to join for the second half." in text  # her full reply, as written
+    captions = "\n".join(c.value for c in deal.caption)
+    assert "Reply triage: **meeting_request**" in captions
+    assert "approved by demo-reviewer@cool.example" in captions
+
+
+def test_conversation_shows_a_draft_waiting_for_approval(isolated_state):
+    at = page("demo")
+    button(at, "Next: New lead: BrightBite").click().run()
+    deal = page("deal")
+    assert any("Draft waiting for approval" in m.value for m in deal.markdown)

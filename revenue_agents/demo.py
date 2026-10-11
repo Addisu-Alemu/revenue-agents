@@ -105,6 +105,13 @@ class _Demo:
         self.out(f'    "{first[:100]}{"..." if len(first) > 100 else ""}"')
         event = story.reply_event(reply)
         self.handle(event)
+        deal = next((d for d in self.system.crm.deals() if d.lead_id == reply.lead_id), None)
+        briefs = [a for a in self.system.crm.timeline(deal.id) if a.kind == "call_brief"] if deal else []
+        if briefs:
+            self.out("  Call brief for the rep (before the meeting):")
+            for line in briefs[-1].data["markdown"].splitlines():
+                if line.strip():
+                    self.out(f"    {line.replace('**', '').replace('### ', '')}")
         if show_duplicate:
             self.out("  Same webhook delivered again (at-least-once delivery):")
             self.handle(event)
@@ -190,7 +197,8 @@ class _Demo:
 
         self.out("\n=== Knowledge loop ===")
         for lesson in system.lessons.all():
-            uses = [use.deal_id for use in system.lessons.uses(lesson.id)]
+            uses = [f"{use.deal_id} ({'call brief' if 'call_brief' in use.used_in else 'email'})"
+                    for use in system.lessons.uses(lesson.id)]
             self.out(f"  - {lesson.text}\n    learned from {lesson.source} {lesson.source_id}; "
                      f"used in: {', '.join(uses) or 'not yet'}")
 

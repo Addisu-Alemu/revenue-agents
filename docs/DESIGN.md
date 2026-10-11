@@ -50,6 +50,7 @@ Each agent has **one job** and returns its findings plus the **actions it propos
 | **Research** | Enrich a lead (firmographics, buying signals) | No | `enrich_lead` |
 | **Scoring** | Fit / intent / engagement with reasons → tier | No (deterministic: the tier gates approval) | `score_lead` |
 | **Reply triage** | Classify a reply's intent, flag what needs attention, learn a lesson | Yes | `classify_reply`, `flag_deal`, `record_lesson` |
+| **Call brief** | One-page prep sheet when a deal reaches Meeting: facts, why they fit, what they said, lessons from similar deals, questions for missing proposal fields | No | `prepare_call_brief` |
 | **Call intel** | Transcript → `DealFields`, pains, objections, lessons | Yes | `update_deal`, `record_lesson` |
 | **Outreach** | Draft first-touch email from pack messaging + lessons | Yes | `send_email` |
 | **Deal desk** | Generate and validate the IO from deal data; send for approval and e-sign | No | `draft_io`, `send_pricing`, `send_io`, `send_for_signature` |
@@ -126,11 +127,13 @@ flowchart LR
     CI -->|record_lesson| LS[(Lesson store)]
     RT -->|record_lesson<br/>not from suspicious messages| LS
     LS -->|newest lessons for segment| OA[Outreach agent]
+    LS -->|lessons for segment| CB[Call brief agent<br/>at Meeting]
+    CB -->|record_use| LS
     OA -->|email cites lessons_used| GW[Gateway] --> H[send_email handler]
     H -->|record_use| LS
 ```
 
-Lessons come from three sources: **calls**, **replies** and **human reviewers** (a rejection note the reviewer chose to save). Each lesson records **where it came from** (call, reply or review id) and each use records **where it went** (the email action), so a lesson can be traced from the call where it was learned to every email it shaped. Lessons are scoped by segment and purpose (`outreach`, `call_brief`). Suspicious messages never produce lessons.
+Lessons come from three sources: **calls**, **replies** and **human reviewers** (a rejection note the reviewer chose to save). Each lesson records **where it came from** (call, reply or review id) and each use records **where it went** (the email action), so a lesson can be traced from the call where it was learned to every email and call brief it shaped. Lessons feed both **outreach** and **call briefs**, as the brief requires. The call brief turns the proposal fields that are still missing (budget, products, dates, signer) into questions for the rep, so the meeting collects exactly what the IO needs. Lessons are scoped by segment and purpose (`outreach`, `call_brief`). Suspicious messages never produce lessons.
 
 **Example output** (BrightBite, Tier A, total 97):
 > **Fit 100:** Matched: Franchise or multi-location business (+30); 50+ locations that need local ads (+25); Spends $1M+ a year on ads (+25); Already buys programmatic media (+10); Large enough team to run a pilot (+10).
@@ -145,7 +148,10 @@ Every trigger becomes an `Event` with an id from its source (webhook delivery id
 | --- | --- | --- | --- | --- |
 | New contact / form fill | HubSpot webhook | `lead.created` | Research → Scoring → Outreach (if tier in pack's `outreach_tiers`) | → enriched → scored → outreach (Tier A waits) |
 | Human approves / rejects | Approval queue (UI) | `approval.decided` | Gateway re-checks kill switch and scope, then executes | email sent → outreach; IO sent → signature |
-| Reply received | Email provider webhook | `reply.received` | Reply triage → flags | → replied → meeting (if requested) / closed_lost (unsubscribe) |
+| Reply received | Email provider webhook | `reply.received` | Reply triage → flags; at Meeting, Call brief agent prepares the rep's brief | → replied → meeting (if requested) / closed_lost (unsubscribe) |
+| Meeting time proposed *(designed)* | Orchestrator, after a meeting request | `meeting.propose` | Scheduling agent reads the rep's free slots and the customer's stated availability and drafts an invite. It's **outward-facing, so it needs approval** | — |
+| Meeting booked *(designed)* | Calendar webhook (Google / Outlook) | `meeting.scheduled` | Store the time on the deal; deliver the call brief to the rep (Slack DM or email + HubSpot note); schedule a reminder | — |
+| Meeting reminder *(designed)* | Scheduler, 1 hour before | `meeting.reminder` | Send the rep the brief again, refreshed with anything new since it was made | — |
 | Transcript ready | Fireflies webhook | `call.completed` | Call intel → if proposal fields complete: Deal desk | → qualified → proposal (IO send waits) |
 | IO signed | E-sign webhook (DocuSign) | `signature.completed` | Verify envelope with the provider → close won → handoff note | → handoff |
 | SLA timer | Scheduler (e.g. every morning) | `sla.check` | Stall detection: days in stage > the pack's `tracking.stall_days` → `stalled_<stage>` flag + reminder on the timeline (once per deal and stage) | — |
@@ -162,6 +168,8 @@ Every trigger becomes an `Event` with an id from its source (webhook delivery id
 | proposal / signature / handoff | IO drafted / IO sent / IO signed |
 
 When criteria aren't met, the deal stays put and the missing items are logged on its timeline ("Stays in meeting: qualified needs budget_usd").
+
+**Between the meeting request and the call.** The meeting itself is human: the rep and the customer meet on Zoom or Teams, and Fireflies records it; its transcript is the next event (`call.completed`). *Built:* the call brief is prepared when the deal reaches Meeting, and the SLA check flags the deal if no transcript arrives within the pack's `stall_days` for `meeting`. *Designed, not built:* delivering the brief where the rep works (Slack, email, HubSpot note), proposing meeting times (a customer-facing email, so it goes through the approval queue like any first touch) and a reminder before the call. These reuse the existing patterns (an agent proposes, the policy decides, a handler delivers), so each one is a new agent, action type and handler rather than a change to the orchestrator's design.
 
 **IO / contract automation** (end to end in the slice):
 
@@ -218,7 +226,10 @@ classDiagram
 | `Lesson` | A reusable insight from a call or reply: segment, **source** (call/reply + id, so every lesson is traceable), text, and what it applies to (`outreach`, `call_brief`) |
 | `LessonUse` | Which action used which lesson on which deal: the "visibly used" half of the knowledge loop |
 | `Activity` | One entry on a deal's timeline (HubSpot engagement): email sent, reply, flag, document, note |
+| `Message` | One email in a deal's conversation, either direction: id (Message-ID), thread id, `in_reply_to`, full body, and metadata (who approved it, lessons used, or how reply triage read it) |
 | `Action`, `ApprovalRequest`, `AuditEvent` | A proposed side effect, its approval record, and the audit trail (section 6) |
+
+**Conversation threads.** Every sent email is stored as an outbound `Message` (id `msg:<action id>`, thread `T-<deal>`); every reply is stored with its **full text** as an inbound `Message`, linked to the email it answers: exactly, when the reply carries `in_reply_to` (the In-Reply-To header real providers send), otherwise to the latest email we sent on that deal. A reply that links to nothing is still stored, but flagged `reply_without_outreach` and doesn't move the deal. The UI shows the thread as a conversation with the agents' notes on each reply.
 
 **System of record.** `CRM` is an interface; `MockHubSpot` implements it on a locked, atomically written JSON file seeded from the mock leads. Deals are created idempotently per lead (`L-001 → D-001`). A real HubSpot client would implement the same interface (deals ↔ HubSpot deals, `Activity` ↔ engagements, flags ↔ deal properties).
 
@@ -259,6 +270,7 @@ flowchart LR
 - **Approval doesn't bypass the kill switch.** Approved actions are re-checked right before execution.
 - **Idempotent, race-safe execution:** each action has a deterministic id (e.g. `email:D-001:first_touch`). Before running, the gateway **claims** the id by creating a marker file with `O_CREAT | O_EXCL`. The OS guarantees only one caller wins, even across processes, so two copies of a webhook arriving at the same moment send **one** email. (A check-then-act version sent 4 emails out of 10 concurrent deliveries; the claim sends 1. Both are covered by tests.) The approval queue is keyed by the same id and guarded by a file lock (`fcntl.flock`). Without it, 19 of 20 concurrent submissions were lost.
 - **Inbound content is untrusted** (`guardrails/untrusted.py`). Replies and transcripts reach the model inside `<untrusted source="...">` tags, with a rule never to follow instructions inside them. The content can't close the tag early (escaped), and the source label is sanitised. Separately, a plain-code detector (`injection_signals`) looks for instruction-like text: "ignore previous instructions", fake `[SYSTEM]` notes, "skip approval", "mark as Tier A", requests for internal pricing. *Trade-off:* pattern lists catch known styles, not every attack. They're one layer; the real protection is that the model can't act (no tools, gateway-only side effects) and that risk is read from deal state.
+- **Agent trace (observability).** Every event gets a step-by-step trace: each agent's inputs, output and proposed actions; each model call's exact prompt, raw answer (before code checks), model, latency and cost; each policy decision with its rule; each execution and stage change (or why a stage didn't move). It's recorded by thin wrappers (`TracedAgent`, `TracingLLM`), so agents don't change. It answers "how do we know the agents work?" and is the basis for debugging and evaluation: a production version would export to an observability tool and sample traces for review.
 - **Audit log:** append-only JSONL. Every policy decision, execution, duplicate and block is recorded with actor, deal, action and reason.
 - **Kill switch = pause, not delete.** Engaged with `scripts/kill_switch.py on` (or the UI), it makes the orchestrator **hold** incoming events in arrival order instead of processing them; human approval decisions are still recorded but their actions wait; the digest still runs. On release, held events are replayed in order and approved-but-unexecuted actions run, each exactly once thanks to action claims. An event already being processed when the switch is pulled is also held and replayed. The gateway's rule 1 (switch on → BLOCKED) remains as a second layer. Pause and resume are audited, and a demo reset never turns the switch off.
 - **Reject with feedback → redraft.** Rejecting a draft email with a note sends it back to the outreach agent as reviewer feedback (with the rejected draft); the new version (`first_touch:v2`) goes through the same policy, so it needs approval again. After two redrafts the deal is flagged `needs_manual_email` instead of looping. Notes are one-off by default; ticking "save as a lesson" turns a note into a lesson with source `review`, because auto-saving every note would pollute the knowledge loop with one-off fixes.

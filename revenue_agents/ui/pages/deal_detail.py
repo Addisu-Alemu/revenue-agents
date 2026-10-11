@@ -32,21 +32,25 @@ def render() -> None:
         components.flag_badges(deal.flags)
     components.stage_progress(deal)
 
-    overview, history, emails, documents = st.tabs(["Overview", "Timeline", "Emails", "Insertion order"])
+    overview, conversation, brief, history, documents = st.tabs(
+        ["Overview", "Conversation", "Call brief", "Timeline", "Insertion order"])
     with overview:
         _overview(deal)
+    with brief:
+        briefs = [a for a in activities if a.kind == "call_brief"]
+        if briefs:
+            with st.container(border=True):
+                st.markdown(briefs[-1].data["markdown"].replace("$", "\\$"))
+        else:
+            st.caption("Prepared automatically when the deal reaches Meeting: what we know, lessons from similar "
+                       "deals, and the questions to ask.")
     with history:
         if activities:
             components.timeline(activities)
         else:
             st.caption("No activity yet.")
-    with emails:
-        sent = [a for a in activities if a.kind == "email_sent"]
-        for activity in sent:
-            with st.container(border=True):
-                components.email_card(activity.data)
-        if not sent:
-            st.caption("No email sent yet. Tier A first emails wait in the approvals queue.")
+    with conversation:
+        components.conversation(system, deal)
     with documents:
         docs = [a for a in activities if a.kind == "document"]
         if docs:

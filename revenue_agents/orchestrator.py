@@ -15,7 +15,8 @@ while paused; the gateway guarantees nothing executes.
     lead.created     -> research -> scoring -> outreach (Tier A waits for approval)
     approval.decided -> execute the approved action; a rejected email with a note is redrafted
                         (max 2 redrafts), and the note can be saved as a lesson
-    reply.received   -> reply triage -> flags (meeting / pricing / injection / unsubscribe); a reply from a
+    reply.received   -> reply triage -> flags (meeting / pricing / injection / unsubscribe); a meeting
+                        request moves the deal to Meeting and prepares a call brief for the rep; a reply from a
                         lead we never emailed is flagged and doesn't move the deal
     call.completed   -> call intel -> qualified? -> deal desk drafts IO (sending waits for approval)
     signature.completed -> verify the envelope with the e-sign provider -> close won -> handoff
@@ -29,6 +30,7 @@ from dataclasses import dataclass
 
 from pydantic import Field
 
+from revenue_agents.agents.call_brief import CallBriefAgent
 from revenue_agents.agents.call_intel import CallIntelAgent
 from revenue_agents.agents.deal_desk import DealDeskAgent
 from revenue_agents.agents.outreach import DraftRejectedError, OutreachAgent, Review
@@ -46,10 +48,11 @@ from revenue_agents.guardrails.held_events import HeldEvents
 from revenue_agents.guardrails.kill_switch import KillSwitch
 from revenue_agents.guardrails.policy import Action, ActionType
 from revenue_agents.lessons import LessonStore
-from revenue_agents.models import Deal, Lesson, Model, Reply, Stage
+from revenue_agents.models import Deal, Lesson, Message, Model, Reply, Stage
 from revenue_agents.segments import SegmentRegistry
 from revenue_agents.stages import ORDER, is_forward, missing_for
 from revenue_agents.storage import utc_now
+from revenue_agents.tracing import NullTracer, Tracer
 from revenue_agents.tracking import Tracker
 
 # Accepted even while the kill switch is on: human decisions are recorded (the gateway still blocks
@@ -70,6 +73,7 @@ class Agents:
     scoring: ScoringAgent
     outreach: OutreachAgent
     reply_triage: ReplyTriageAgent
+    call_brief: CallBriefAgent
     call_intel: CallIntelAgent
     deal_desk: DealDeskAgent
 
@@ -87,7 +91,8 @@ class Orchestrator:
 
     def __init__(self, crm: CRM, lessons: LessonStore, gateway: ActionGateway, approvals: ApprovalQueue,
                  audit: AuditLog, segments: SegmentRegistry, agents: Agents, events: ActionClaims,
-                 tracker: Tracker, esign: ESignProvider, kill_switch: KillSwitch, held: HeldEvents) -> None:
+                 tracker: Tracker, esign: ESignProvider, kill_switch: KillSwitch, held: HeldEvents,
+                 tracer: Tracer | None = None) -> None:
         self._crm = crm
         self._lessons = lessons
         self._gateway = gateway
@@ -100,6 +105,7 @@ class Orchestrator:
         self._esign = esign
         self._kill_switch = kill_switch
         self._held = held
+        self._tracer = tracer or NullTracer()
         self._handlers = {
             EventType.LEAD_CREATED: self._on_lead_created,
             EventType.APPROVAL_DECIDED: self._on_approval,
@@ -111,6 +117,10 @@ class Orchestrator:
         }
 
     def handle(self, event: Event) -> EventReport:
+        with self._tracer.event(event.id):
+            return self._handle(event)
+
+    def _handle(self, event: Event) -> EventReport:
         if not self._events.claim(event.id):
             self._audit.record(self.name, "event_duplicate", action_id=event.id, detail=event.type.value)
             return EventReport(event_id=event.id, status="duplicate", steps=["Already handled: ignored"])
@@ -168,7 +178,8 @@ class Orchestrator:
         request = self._approvals.get(request_id)
         if request.status is not ApprovalStatus.APPROVED:
             return [f"{request_id} is {request.status.value}: nothing to run"]
-        return self._execute_approved(request)
+        with self._tracer.event(f"run_now:{request_id}"):
+            return self._execute_approved(request)
 
     # --- Event handlers --------------------------------------------------------
 
@@ -269,8 +280,18 @@ class Orchestrator:
         if triage.flags:
             steps.append(f"Flags: {', '.join(triage.flags)}")
 
-        emailed = any(activity.kind == "email_sent" for activity in self._crm.timeline(deal.id))
-        if not emailed:
+        answers = self._email_answered_by(reply, deal)
+        self._crm.add_message(Message(
+            id=f"msg:reply:{reply.id}", thread_id=answers.thread_id if answers else f"T-{deal.id}", deal_id=deal.id,
+            direction="inbound", sender=reply.sender, to=answers.sender if answers else "", subject=reply.subject,
+            body=reply.body, at=reply.received_at, in_reply_to=answers.id if answers else None,
+            meta={"intent": triage.classification.intent, "summary": triage.classification.summary,
+                  "flags": triage.flags, "suggested_next_step": triage.classification.suggested_next_step},
+        ))
+        if answers:
+            steps.append(f"Linked to our email {answers.id} in thread {answers.thread_id}")
+
+        if answers is None:
             # We never emailed this lead, so this can't be a reply to us: a data error, a misrouted
             # thread, or a spoofed message. Record and flag it, learn nothing, don't move the deal.
             actions = [a for a in result.actions if a.type is not ActionType.RECORD_LESSON]
@@ -288,11 +309,27 @@ class Orchestrator:
             return steps + self._advance(deal.id, Stage.CLOSED_LOST, reason="contact unsubscribed")
         if "meeting_requested" in flags:
             steps += self._advance(deal.id, Stage.MEETING)
+            if self._crm.get_deal(deal.id).stage is Stage.MEETING:
+                steps += self._prepare_call_brief(lead, deal.id)
         if "pricing_requested" in triage.flags:
             steps.append("Pricing question: a human must answer (pricing always needs approval)")
         if "possible_prompt_injection" in triage.flags:
             steps.append("Suspicious content: ignored as instructions, no lesson learned")
         return steps
+
+    def _email_answered_by(self, reply: Reply, deal: Deal) -> Message | None:
+        """Which of our emails this reply answers: the exact one if the reply names it (In-Reply-To),
+        otherwise the latest email we sent on this deal. None means we never emailed them."""
+        sent = [message for message in self._crm.messages(deal.id) if message.direction == "outbound"]
+        exact = next((message for message in sent if message.id == reply.in_reply_to), None)
+        return exact or (sent[-1] if sent else None)
+
+    def _prepare_call_brief(self, lead, deal_id: str) -> list[str]:
+        """Before the meeting: a prep sheet with what we know, lessons from similar deals, and what to ask."""
+        deal = self._crm.get_deal(deal_id)
+        lessons = self._lessons.for_segment(lead.segment, purpose="call_brief")
+        result = self._agents.call_brief.run(lead, deal, self._crm.timeline(deal_id), lessons)
+        return self._submit(result.actions)
 
     def _on_call(self, event: Event) -> list[str]:
         lead = self._crm.get_lead(event.payload["lead_id"])
@@ -386,11 +423,15 @@ class Orchestrator:
             return []
         missing = missing_for(target, deal, self._crm.timeline(deal_id))
         if missing:
+            self._tracer.record("stage", target.value, {"deal": deal_id, "from": deal.stage.value, "to": deal.stage.value,
+                                                         "why": f"not moved: {target.value} needs {', '.join(missing)}"})
             self._crm.log(deal_id, "note", f"Stays in {deal.stage.value}: {target.value} needs {', '.join(missing)}")
             return [f"Stays in {deal.stage.value}: {target.value} needs {', '.join(missing)}"]
 
         self._crm.save_deal(deal.model_copy(update={"stage": target, "stage_entered_at": utc_now()}))
         summary = f"Stage {deal.stage.value} -> {target.value}" + (f" ({reason})" if reason else "")
+        self._tracer.record("stage", target.value, {"deal": deal_id, "from": deal.stage.value, "to": target.value,
+                                                     "why": reason or "exit criteria met"})
         self._crm.log(deal_id, "stage_change", summary, {"from": deal.stage.value, "to": target.value})
         self._audit.record(self.name, "stage_changed", deal_id=deal_id, detail=summary)
         return [summary]

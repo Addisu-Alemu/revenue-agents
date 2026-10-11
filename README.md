@@ -68,7 +68,7 @@ python run_demo.py --auto-approve   # don't pause at approvals
 python run_demo.py --segment agency # the agency segment (added with config only)
 ```
 
-The demo runs the brand segment's mock data through the real system: a new lead is enriched, scored and tiered; the Tier A first email **pauses for your approval**; Maya's reply moves the deal to a meeting (and a duplicate webhook is ignored); the call transcript fills the deal fields and produces lessons; the IO is drafted and **pauses for approval**, goes out for e-signature, a forged "signed" webhook is rejected and the real one closes the deal (handoff); the next brand lead's email **cites the lesson** from the call; Owen's prompt-injection reply is flagged; and six days later the SLA check flags a stalled deal and the daily digest prints. It ends with the pipeline, the knowledge loop and the audit log size.
+The demo runs the brand segment's mock data through the real system: a new lead is enriched, scored and tiered; the Tier A first email **pauses for your approval**; Maya's reply moves the deal to a meeting, and a **call brief** is prepared for the rep (and a duplicate webhook is ignored); the call transcript fills the deal fields and produces lessons; the IO is drafted and **pauses for approval**, goes out for e-signature, a forged "signed" webhook is rejected and the real one closes the deal (handoff); the next brand lead's email **cites the lesson** from the call; Owen's prompt-injection reply is flagged; and six days later the SLA check flags a stalled deal and the daily digest prints. It ends with the pipeline, the knowledge loop and the audit log size.
 
 In fake mode, model answers are scripted for the mock data (and the demo says so); everything else is the real code path. `--llm claude` never falls back to fake: if the key is missing or has no credit, it stops with an error. Demo state is written to `state/demo/` and reset on each run (`--keep-state` to keep it).
 
@@ -78,7 +78,7 @@ In fake mode, model answers are scripted for the mock data (and the demo says so
 streamlit run app.py
 ```
 
-Opens in the browser (http://localhost:8501). The **Live demo** page runs the same story one step at a time, with approvals decided inline; **Pipeline**, **Deal detail** and **Approvals** show the state. It shares `state/demo/` with `run_demo.py`, and every button sends an event to the orchestrator, so the policy and gateway apply exactly as in the terminal.
+Opens in the browser (http://localhost:8501). The **Live demo** page runs the same story one step at a time: each agent appears **live as it works** (with its result, model time and cost), an **agent map** lights up the agents, policy and stores that worked on the last step, and approvals are decided inline; **Agent trace** shows **scorecards for the agent team** (runs, model calls, time, cost, latest result) and, for any event, each agent's input, the exact prompt sent to the model, its raw answer, what was proposed and what the policy decided; **Pipeline**, **Deal detail** (including the email **Conversation**, both ways) and **Approvals** show the state. It shares `state/demo/` with `run_demo.py`, and every button sends an event to the orchestrator, so the policy and gateway apply exactly as in the terminal.
 
 ## Tests
 
@@ -99,7 +99,7 @@ revenue_agents/
   crm.py             CRM interface + MockHubSpot (system of record: leads, deals, timeline)
   lessons.py         Lesson store: knowledge loop memory, with usage tracking
   handlers.py        What executed actions actually do (the only side-effecting code)
-  agents/            research, scoring, outreach, reply_triage, call_intel, deal_desk
+  agents/            research, scoring, outreach, reply_triage, call_brief, call_intel, deal_desk
   orchestrator.py    Owns deal state; handles events; moves stages
   stages.py          Stage order and exit criteria
   events.py          Event types (triggers)
@@ -108,6 +108,7 @@ revenue_agents/
   esign.py           E-signature interface + mock provider
   demo.py            The live demo story; demo_llm.py holds the scripted model answers
   storage.py         Atomic, locked file storage for runtime state
+  tracing.py         Agent trace: TracedAgent / TracingLLM wrappers record each step per event
   skills/
     enrichment.py    Enricher interface + mock provider
     scoring.py       Fit / intent / engagement scoring with reasons, and tiers

@@ -6,7 +6,7 @@ import streamlit as st
 
 from revenue_agents import story
 from revenue_agents.llm import LLMError
-from revenue_agents.ui import components, context
+from revenue_agents.ui import agent_views, components, context
 
 
 def render() -> None:
@@ -48,8 +48,13 @@ def render() -> None:
         st.subheader("What just happened")
         if not st.session_state.log:
             st.caption("Nothing yet. Press the button above to send the first event.")
-        components.log_entries(limit=6)
+        components.log_entries(system, limit=6)
     with right:
+        newest = st.session_state.log[0] if st.session_state.log else None
+        spans = system.tracer.spans()[newest.trace[0]:newest.trace[1]] if newest and newest.trace else []
+        st.subheader("Who worked on the last step")
+        st.graphviz_chart(agent_views.agent_map(spans, len(pending)), width="stretch")
+        st.caption("Lit up: agents, policy and stores that worked on the last step. Grey: idle.")
         st.subheader("The story")
         for step, is_done in zip(steps, done):
             if is_done:
@@ -81,15 +86,21 @@ def _confirm_reset() -> None:
 
 
 def _run(system, step: story.Step) -> None:
-    try:
-        lines = context.run_step(system, step)
-    except story.NotReadyError as error:
-        st.warning(str(error))
-        return
-    except LLMError as error:
-        st.error(f"Model call failed: {error}")
-        return
-    context.log(step.title, lines)
+    start = system.tracer.count()
+    with st.status(f"Running: {step.title}", expanded=True) as status:
+        try:
+            with system.tracer.listening(agent_views.LiveProgress()):  # each agent appears as it works
+                lines = context.run_step(system, step)
+        except story.NotReadyError as error:
+            status.update(label="Not ready", state="error")
+            st.warning(str(error))
+            return
+        except LLMError as error:
+            status.update(label="Model call failed", state="error")
+            st.error(f"Model call failed: {error}")
+            return
+        status.update(label=f"Done: {step.title}", state="complete")
+    context.log(step.title, lines, (start, system.tracer.count()))
     st.rerun()
 
 
