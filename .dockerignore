@@ -1,0 +1,9 @@
+# Never copy secrets, local environments or runtime state into the image.
+.env
+.venv/
+.git/
+state/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage

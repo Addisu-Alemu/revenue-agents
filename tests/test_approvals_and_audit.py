@@ -44,6 +44,13 @@ def test_approve_records_who_and_when(queue, send_io):
     assert queue.pending() == []
 
 
+def test_all_lists_pending_and_decided_newest_first(queue, send_io):
+    queue.submit(send_io, "IOs need approval")
+    queue.submit(send_io.model_copy(update={"id": "send_io:D-002"}), "IOs need approval")
+    queue.approve("send_io:D-001", reviewer="maria@cool.ai")
+    assert [r.id for r in queue.all()] == ["send_io:D-002", "send_io:D-001"]
+
+
 def test_cannot_decide_twice(queue, send_io):
     queue.submit(send_io, "IOs need approval")
     queue.reject("send_io:D-001", reviewer="maria@cool.ai", note="Wrong budget")

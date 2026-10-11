@@ -112,7 +112,7 @@ def test_digest_lists_todays_lessons_and_is_saved(tmp_path, system, transcript):
 def test_empty_digest_says_none(system):
     report = system.orchestrator.handle(scheduled(EventType.DIGEST_DAILY))
     assert report.steps[1] == "Pipeline: empty"
-    assert report.steps.count("  none") == 5
+    assert report.steps.count("  none") == 7
 
 
 # --- Config ------------------------------------------------------------------------------

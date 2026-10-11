@@ -190,3 +190,31 @@ def test_unfilled_template_fields_block_the_io(tmp_path, leads, segments, make_d
     result = DealDeskAgent(segments, template=template).run(leads["L-001"], deal)
     assert result.output.errors == ["unfilled template fields: ['secret_discount']"]
     assert result.actions == []
+
+
+@pytest.mark.parametrize(
+    "opening",
+    [
+        "Hi Maya, congratulations on the 60 new BrightBite locations planned for 2027.",
+        "Hello Maya! Congratulations on the 60 new BrightBite locations planned for 2027.",
+        "Dear Maya Thompson, congratulations on the 60 new BrightBite locations planned for 2027.",
+        "hi maya — congratulations on the 60 new BrightBite locations planned for 2027.",
+    ],
+)
+def test_a_greeting_from_the_model_is_not_doubled(leads, enricher, segments, make_deal, opening):
+    """Found on the first real Claude run: the template greets, so the model's own greeting is removed."""
+    result, _, _ = draft(leads, enricher, segments, make_deal, answer={**GOOD_DRAFT, "opening": opening})
+    body = result.output.body
+    assert body.count("Maya") == 1
+    assert "Hi Maya,\n\nCongratulations on the 60 new BrightBite locations" in body
+
+
+def test_words_that_merely_start_like_a_greeting_are_kept(leads, enricher, segments, make_deal):
+    opening = "Highlights from your expansion caught our eye."
+    result, _, _ = draft(leads, enricher, segments, make_deal, answer={**GOOD_DRAFT, "opening": opening})
+    assert "Highlights from your expansion caught our eye." in result.output.body
+
+
+def test_prompt_tells_the_model_not_to_greet(leads, enricher, segments, make_deal):
+    _, llm, _ = draft(leads, enricher, segments, make_deal)
+    assert "Don't start with a greeting" in llm.calls[0].system

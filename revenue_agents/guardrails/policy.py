@@ -27,6 +27,7 @@ class ActionType(str, Enum):
     CLASSIFY_REPLY = "classify_reply"
     RECORD_LESSON = "record_lesson"
     SEND_EMAIL = "send_email"
+    PREPARE_CALL_BRIEF = "prepare_call_brief"
     DRAFT_IO = "draft_io"
     SEND_PRICING = "send_pricing"
     SEND_IO = "send_io"
@@ -64,10 +65,13 @@ AGENT_PERMISSIONS: dict[str, frozenset[ActionType]] = {
     "outreach": frozenset({ActionType.SEND_EMAIL}),
     "reply_triage": frozenset({ActionType.CLASSIFY_REPLY, ActionType.FLAG_DEAL, ActionType.RECORD_LESSON}),
     "call_intel": frozenset({ActionType.UPDATE_DEAL, ActionType.RECORD_LESSON}),
+    "call_brief": frozenset({ActionType.PREPARE_CALL_BRIEF}),
     "deal_desk": frozenset(
         {ActionType.DRAFT_IO, ActionType.SEND_PRICING, ActionType.SEND_IO, ActionType.SEND_FOR_SIGNATURE}
     ),
-    "orchestrator": frozenset({ActionType.UPDATE_DEAL, ActionType.FLAG_DEAL, ActionType.CLOSE_DEAL}),
+    "orchestrator": frozenset(
+        {ActionType.UPDATE_DEAL, ActionType.FLAG_DEAL, ActionType.CLOSE_DEAL, ActionType.RECORD_LESSON}
+    ),
 }
 
 # High-risk actions: always need a human, whatever the tier or segment.

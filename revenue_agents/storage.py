@@ -1,16 +1,18 @@
 """Tiny file-based persistence for runtime state (approval queue, audit log).
 
 Writes are atomic: data goes to a temporary file that then replaces the real
-one in a single step, so a crash never leaves a half-written file. In
-production this would be a database; the interfaces would stay the same.
+one in a single step, so a crash never leaves a half-written file. Locks work
+on Linux, macOS (fcntl) and Windows (msvcrt). Text is always UTF-8, so files
+read the same on every OS. In production this would be a database; the
+interfaces would stay the same.
 """
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import tempfile
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -18,6 +20,32 @@ from pathlib import Path
 from typing import Any
 
 STATE_DIR = Path(__file__).resolve().parent.parent / "state"
+ENCODING = "utf-8"
+
+if os.name == "nt":  # pragma: no cover - runs on Windows only
+    import msvcrt
+
+    def _lock(file) -> None:
+        file.seek(0)
+        while True:
+            try:
+                msvcrt.locking(file.fileno(), msvcrt.LK_LOCK, 1)  # retries for ~10s, then raises
+                return
+            except OSError:
+                continue  # still held by another process: keep waiting
+
+    def _unlock(file) -> None:
+        file.seek(0)
+        msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
+
+else:
+    import fcntl
+
+    def _lock(file) -> None:
+        fcntl.flock(file, fcntl.LOCK_EX)
+
+    def _unlock(file) -> None:
+        fcntl.flock(file, fcntl.LOCK_UN)
 
 
 def utc_now() -> datetime:
@@ -26,7 +54,7 @@ def utc_now() -> datetime:
 
 def read_json(path: Path, default: Any) -> Any:
     path = Path(path)
-    return json.loads(path.read_text()) if path.exists() else default
+    return json.loads(path.read_text(encoding=ENCODING)) if path.exists() else default
 
 
 def write_json(path: Path, data: Any) -> None:
@@ -34,9 +62,21 @@ def write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # A unique temp name per write, so concurrent writers never share a temp file.
     fd, temp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    with os.fdopen(fd, "w") as file:
-        file.write(json.dumps(data, indent=2, default=str))
-    os.replace(temp, path)
+    with os.fdopen(fd, "w", encoding=ENCODING) as file:
+        file.write(json.dumps(data, indent=2, default=str, ensure_ascii=False))
+    _replace(temp, path)
+
+
+def _replace(source: str, target: Path, attempts: int = 20) -> None:
+    """os.replace, retried briefly: on Windows it fails while another process has the target open."""
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05)
 
 
 @contextmanager
@@ -44,24 +84,24 @@ def locked(path: Path) -> Iterator[None]:
     """Hold an exclusive lock for a read-modify-write of `path`, across threads and processes."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path.with_name(path.name + ".lock"), "w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
+    with open(path.with_name(path.name + ".lock"), "a+", encoding=ENCODING) as lock_file:
+        _lock(lock_file)
         try:
             yield
         finally:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
+            _unlock(lock_file)
 
 
 def append_jsonl(path: Path, record: dict[str, Any]) -> None:
     """Append one JSON record as a line. Existing lines are never rewritten."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as file:
-        file.write(json.dumps(record, default=str) + "\n")
+    with path.open("a", encoding=ENCODING) as file:
+        file.write(json.dumps(record, default=str, ensure_ascii=False) + "\n")
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     path = Path(path)
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding=ENCODING).splitlines() if line.strip()]

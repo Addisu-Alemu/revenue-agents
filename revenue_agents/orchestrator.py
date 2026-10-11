@@ -6,9 +6,18 @@ criteria are met. Each event id is claimed before processing, so a webhook
 delivered twice is handled once; if processing fails, the claim is released
 so a retry can run.
 
+The kill switch is a pause: while it is on, incoming events are held (not
+processed, not lost) and approved actions wait. resume() releases the switch,
+replays held events in arrival order, then runs approved actions that never
+ran. Human decisions (approval.decided) and the digest are still accepted
+while paused; the gateway guarantees nothing executes.
+
     lead.created     -> research -> scoring -> outreach (Tier A waits for approval)
-    approval.decided -> execute or drop the approved/rejected action
-    reply.received   -> reply triage -> flags (meeting / pricing / injection / unsubscribe)
+    approval.decided -> execute the approved action; a rejected email with a note is redrafted
+                        (max 2 redrafts), and the note can be saved as a lesson
+    reply.received   -> reply triage -> flags (meeting / pricing / injection / unsubscribe); a meeting
+                        request moves the deal to Meeting and prepares a call brief for the rep; a reply from a
+                        lead we never emailed is flagged and doesn't move the deal
     call.completed   -> call intel -> qualified? -> deal desk drafts IO (sending waits for approval)
     signature.completed -> verify the envelope with the e-sign provider -> close won -> handoff
     sla.check        -> flag stalled deals and remind the rep (once per deal and stage)
@@ -21,26 +30,37 @@ from dataclasses import dataclass
 
 from pydantic import Field
 
+from revenue_agents.agents.call_brief import CallBriefAgent
 from revenue_agents.agents.call_intel import CallIntelAgent
 from revenue_agents.agents.deal_desk import DealDeskAgent
-from revenue_agents.agents.outreach import DraftRejectedError, OutreachAgent
+from revenue_agents.agents.outreach import DraftRejectedError, OutreachAgent, Review
 from revenue_agents.agents.reply_triage import ReplyTriageAgent
 from revenue_agents.agents.research import ResearchAgent
 from revenue_agents.agents.scoring import ScoringAgent
 from revenue_agents.crm import CRM
 from revenue_agents.esign import EnvelopeStatus, ESignProvider
 from revenue_agents.events import Event, EventType
-from revenue_agents.guardrails.approvals import ApprovalQueue
+from revenue_agents.guardrails.approvals import ApprovalQueue, ApprovalRequest, ApprovalStatus
 from revenue_agents.guardrails.audit import AuditLog
 from revenue_agents.guardrails.claims import ActionClaims
 from revenue_agents.guardrails.gateway import ActionGateway, ActionResult, Outcome
+from revenue_agents.guardrails.held_events import HeldEvents
+from revenue_agents.guardrails.kill_switch import KillSwitch
 from revenue_agents.guardrails.policy import Action, ActionType
 from revenue_agents.lessons import LessonStore
-from revenue_agents.models import Deal, Model, Reply, Stage
+from revenue_agents.models import Deal, Lesson, Message, Model, Reply, Stage
 from revenue_agents.segments import SegmentRegistry
 from revenue_agents.stages import ORDER, is_forward, missing_for
 from revenue_agents.storage import utc_now
+from revenue_agents.tracing import NullTracer, Tracer
 from revenue_agents.tracking import Tracker
+
+# Accepted even while the kill switch is on: human decisions are recorded (the gateway still blocks
+# execution), and the digest only reports.
+ACCEPTED_WHILE_PAUSED = frozenset({EventType.APPROVAL_DECIDED, EventType.DIGEST_DAILY})
+
+# A first email can be redrafted twice after rejection; after that a human writes it.
+MAX_DRAFTS = 3
 
 # Executing these actions is the evidence for the next stage.
 STAGE_AFTER = {ActionType.SEND_EMAIL: Stage.OUTREACH, ActionType.DRAFT_IO: Stage.PROPOSAL,
@@ -53,6 +73,7 @@ class Agents:
     scoring: ScoringAgent
     outreach: OutreachAgent
     reply_triage: ReplyTriageAgent
+    call_brief: CallBriefAgent
     call_intel: CallIntelAgent
     deal_desk: DealDeskAgent
 
@@ -61,7 +82,7 @@ class EventReport(Model):
     """What happened while handling one event, in plain words (for the demo and the UI)."""
 
     event_id: str
-    status: str  # "processed" or "duplicate"
+    status: str  # "processed", "duplicate" or "held"
     steps: list[str] = Field(default_factory=list)
 
 
@@ -70,7 +91,8 @@ class Orchestrator:
 
     def __init__(self, crm: CRM, lessons: LessonStore, gateway: ActionGateway, approvals: ApprovalQueue,
                  audit: AuditLog, segments: SegmentRegistry, agents: Agents, events: ActionClaims,
-                 tracker: Tracker, esign: ESignProvider) -> None:
+                 tracker: Tracker, esign: ESignProvider, kill_switch: KillSwitch, held: HeldEvents,
+                 tracer: Tracer | None = None) -> None:
         self._crm = crm
         self._lessons = lessons
         self._gateway = gateway
@@ -81,6 +103,9 @@ class Orchestrator:
         self._events = events
         self._tracker = tracker
         self._esign = esign
+        self._kill_switch = kill_switch
+        self._held = held
+        self._tracer = tracer or NullTracer()
         self._handlers = {
             EventType.LEAD_CREATED: self._on_lead_created,
             EventType.APPROVAL_DECIDED: self._on_approval,
@@ -92,9 +117,17 @@ class Orchestrator:
         }
 
     def handle(self, event: Event) -> EventReport:
+        with self._tracer.event(event.id):
+            return self._handle(event)
+
+    def _handle(self, event: Event) -> EventReport:
         if not self._events.claim(event.id):
             self._audit.record(self.name, "event_duplicate", action_id=event.id, detail=event.type.value)
             return EventReport(event_id=event.id, status="duplicate", steps=["Already handled: ignored"])
+
+        if self._kill_switch.is_engaged() and event.type not in ACCEPTED_WHILE_PAUSED:
+            self._events.release(event.id)
+            return self._hold(event, "Kill switch on")
 
         self._audit.record(self.name, "event_received", action_id=event.id, detail=event.type.value)
         try:
@@ -103,8 +136,50 @@ class Orchestrator:
             self._events.release(event.id)  # let a retry process it
             self._audit.record(self.name, "event_failed", action_id=event.id, detail=f"{type(error).__name__}: {error}")
             raise
+
+        if self._kill_switch.is_engaged() and event.type not in ACCEPTED_WHILE_PAUSED:
+            # Pulled while this event was being processed: replay it on release. Actions that already ran
+            # are skipped then (their claims), so the replay finishes the work without repeating it.
+            self._events.release(event.id)
+            return self._hold(event, "Kill switch pulled during processing", steps)
+
         self._events.complete(event.id)
         return EventReport(event_id=event.id, status="processed", steps=steps)
+
+    # --- Kill switch -------------------------------------------------------------
+
+    def pause(self, reason: str, by: str) -> list[str]:
+        self._kill_switch.engage(f"{reason} (by {by})")
+        self._audit.record(self.name, "kill_switch_engaged", detail=f"{reason} (by {by})")
+        return [f"Kill switch ON: {reason}. New events will be held; nothing will execute."]
+
+    def resume(self, by: str) -> list[str]:
+        """Release the kill switch, replay held events in arrival order, then run approved actions that waited."""
+        self._kill_switch.release()
+        self._audit.record(self.name, "kill_switch_released", detail=f"by {by}")
+        steps = [f"Kill switch OFF (by {by}). Replaying {len(self._held.all())} held event(s)."]
+        for event in self._held.all():
+            report = self.handle(event)
+            self._held.remove(event.id)
+            steps += [f"{event.type.value} {event.id}:"] + [f"  {line}" for line in report.steps]
+        for request in self.approved_waiting():
+            steps += self.run_approved(request.id)
+        return steps
+
+    def held_events(self) -> list[Event]:
+        return self._held.all()
+
+    def approved_waiting(self) -> list[ApprovalRequest]:
+        """Approved by a human but never executed (kill switch, or a failure after the decision)."""
+        return self._tracker.approved_waiting()
+
+    def run_approved(self, request_id: str) -> list[str]:
+        """Execute an approved action that hasn't run yet ("Run now"). Safe to repeat: actions run once."""
+        request = self._approvals.get(request_id)
+        if request.status is not ApprovalStatus.APPROVED:
+            return [f"{request_id} is {request.status.value}: nothing to run"]
+        with self._tracer.event(f"run_now:{request_id}"):
+            return self._execute_approved(request)
 
     # --- Event handlers --------------------------------------------------------
 
@@ -138,16 +213,62 @@ class Orchestrator:
         return steps + self._submit(result.actions)
 
     def _on_approval(self, event: Event) -> list[str]:
-        request_id, reviewer = event.payload["request_id"], event.payload["reviewer"]
-        if not event.payload["approved"]:
-            self._approvals.reject(request_id, reviewer, event.payload.get("note"))
-            return [f"Rejected by {reviewer}: {request_id}"]
+        request_id, reviewer, approved = event.payload["request_id"], event.payload["reviewer"], event.payload["approved"]
+        request = self._approvals.get(request_id)
+        if request.status is ApprovalStatus.PENDING:
+            decide = self._approvals.approve if approved else self._approvals.reject
+            request = decide(request_id, reviewer, event.payload.get("note"))
+        elif (request.status is ApprovalStatus.APPROVED) != approved:
+            return [f"Already {request.status.value} by {request.decided_by}: decision not changed"]
 
-        request = self._approvals.approve(request_id, reviewer, event.payload.get("note"))
+        if not approved:
+            return self._after_rejection(request, event.payload.get("save_lesson", False))
+        # Same decision again (e.g. a retry after a failure): carry on and run it. Actions run once.
+        return self._execute_approved(request)
+
+    def _after_rejection(self, request: ApprovalRequest, save_lesson: bool) -> list[str]:
+        note = (request.note or "").strip()
+        steps = [f"Rejected by {request.decided_by}: {request.id}" + (f' ("{note}")' if note else "")]
+        if note and save_lesson:
+            steps += self._lesson_from_review(request, note)
+        if note and request.action.type is ActionType.SEND_EMAIL:
+            steps += self._redraft(request, note)
+        return steps
+
+    def _lesson_from_review(self, request: ApprovalRequest, note: str) -> list[str]:
         deal = self._crm.get_deal(request.action.deal_id)
-        result = self._gateway.execute_approved(request_id, deal)
-        return [f"Approved by {reviewer}: {request.action.summary} -> {result.outcome.value}"] + self._after(
-            request.action, result)
+        lesson = Lesson(id=f"lesson:review:{request.id}", segment=deal.segment, source="review",
+                        source_id=request.id, text=note, created_at=utc_now())
+        action = Action(id=f"record_lesson:{deal.id}:{lesson.id}", type=ActionType.RECORD_LESSON, agent=self.name,
+                        deal_id=deal.id, summary=f"Lesson from {request.decided_by}'s review: {note}",
+                        payload={"lesson": lesson.model_dump(mode="json")})
+        return self._submit([action])
+
+    def _redraft(self, request: ApprovalRequest, note: str) -> list[str]:
+        """The outreach agent writes the next version with the reviewer's note. It still needs approval."""
+        deal = self._crm.get_deal(request.action.deal_id)
+        rejected = [r for r in self._approvals.all() if r.action.deal_id == deal.id
+                    and r.action.type is ActionType.SEND_EMAIL and r.status is ApprovalStatus.REJECTED]
+        version = len(rejected) + 1
+        if version > MAX_DRAFTS:
+            return self._flag(deal, "needs_manual_email", f"{len(rejected)} drafts rejected; a human should write it")
+
+        lead = self._crm.get_lead(deal.lead_id)
+        review = Review(feedback=note, previous_body=request.action.payload["body"], next_version=version)
+        lessons = self._lessons.for_segment(lead.segment, purpose="outreach")
+        try:
+            result = self._agents.outreach.run(lead, deal, deal.enrichment, lessons, review=review)
+        except DraftRejectedError as error:
+            return self._flag(deal, "outreach_draft_rejected", str(error))
+        return [f"Redrafting with the reviewer's feedback (v{version})"] + self._submit(result.actions)
+
+    def _execute_approved(self, request: ApprovalRequest) -> list[str]:
+        deal = self._crm.get_deal(request.action.deal_id)
+        result = self._gateway.execute_approved(request.id, deal)
+        line = f"Approved by {request.decided_by}: {request.action.summary} -> {result.outcome.value}"
+        if result.outcome is Outcome.BLOCKED:
+            line += f" ({result.reason}; it will run when the kill switch is released, or via Run now)"
+        return [line] + self._after(request.action, result)
 
     def _on_reply(self, event: Event) -> list[str]:
         reply = Reply.model_validate(event.payload["reply"])
@@ -158,6 +279,28 @@ class Orchestrator:
         steps = [f"Reply {reply.id} from {lead.contact.name}: {triage.classification.intent}"]
         if triage.flags:
             steps.append(f"Flags: {', '.join(triage.flags)}")
+
+        answers = self._email_answered_by(reply, deal)
+        self._crm.add_message(Message(
+            id=f"msg:reply:{reply.id}", thread_id=answers.thread_id if answers else f"T-{deal.id}", deal_id=deal.id,
+            direction="inbound", sender=reply.sender, to=answers.sender if answers else "", subject=reply.subject,
+            body=reply.body, at=reply.received_at, in_reply_to=answers.id if answers else None,
+            meta={"intent": triage.classification.intent, "summary": triage.classification.summary,
+                  "flags": triage.flags, "suggested_next_step": triage.classification.suggested_next_step},
+        ))
+        if answers:
+            steps.append(f"Linked to our email {answers.id} in thread {answers.thread_id}")
+
+        if answers is None:
+            # We never emailed this lead, so this can't be a reply to us: a data error, a misrouted
+            # thread, or a spoofed message. Record and flag it, learn nothing, don't move the deal.
+            actions = [a for a in result.actions if a.type is not ActionType.RECORD_LESSON]
+            steps += self._submit(actions)
+            steps += self._flag(deal, "reply_without_outreach", f"{reply.id} arrived but we never emailed {lead.contact.name}")
+            if "unsubscribe" in triage.flags:  # always honour an unsubscribe
+                steps += self._advance(deal.id, Stage.CLOSED_LOST, reason="contact unsubscribed")
+            return steps + ["Reply without outreach: flagged for a human, stage unchanged, nothing learned"]
+
         steps += self._submit(result.actions)
         steps += self._advance(deal.id, Stage.REPLIED)
 
@@ -166,11 +309,27 @@ class Orchestrator:
             return steps + self._advance(deal.id, Stage.CLOSED_LOST, reason="contact unsubscribed")
         if "meeting_requested" in flags:
             steps += self._advance(deal.id, Stage.MEETING)
+            if self._crm.get_deal(deal.id).stage is Stage.MEETING:
+                steps += self._prepare_call_brief(lead, deal.id)
         if "pricing_requested" in triage.flags:
             steps.append("Pricing question: a human must answer (pricing always needs approval)")
         if "possible_prompt_injection" in triage.flags:
             steps.append("Suspicious content: ignored as instructions, no lesson learned")
         return steps
+
+    def _email_answered_by(self, reply: Reply, deal: Deal) -> Message | None:
+        """Which of our emails this reply answers: the exact one if the reply names it (In-Reply-To),
+        otherwise the latest email we sent on this deal. None means we never emailed them."""
+        sent = [message for message in self._crm.messages(deal.id) if message.direction == "outbound"]
+        exact = next((message for message in sent if message.id == reply.in_reply_to), None)
+        return exact or (sent[-1] if sent else None)
+
+    def _prepare_call_brief(self, lead, deal_id: str) -> list[str]:
+        """Before the meeting: a prep sheet with what we know, lessons from similar deals, and what to ask."""
+        deal = self._crm.get_deal(deal_id)
+        lessons = self._lessons.for_segment(lead.segment, purpose="call_brief")
+        result = self._agents.call_brief.run(lead, deal, self._crm.timeline(deal_id), lessons)
+        return self._submit(result.actions)
 
     def _on_call(self, event: Event) -> list[str]:
         lead = self._crm.get_lead(event.payload["lead_id"])
@@ -264,14 +423,24 @@ class Orchestrator:
             return []
         missing = missing_for(target, deal, self._crm.timeline(deal_id))
         if missing:
+            self._tracer.record("stage", target.value, {"deal": deal_id, "from": deal.stage.value, "to": deal.stage.value,
+                                                         "why": f"not moved: {target.value} needs {', '.join(missing)}"})
             self._crm.log(deal_id, "note", f"Stays in {deal.stage.value}: {target.value} needs {', '.join(missing)}")
             return [f"Stays in {deal.stage.value}: {target.value} needs {', '.join(missing)}"]
 
         self._crm.save_deal(deal.model_copy(update={"stage": target, "stage_entered_at": utc_now()}))
         summary = f"Stage {deal.stage.value} -> {target.value}" + (f" ({reason})" if reason else "")
+        self._tracer.record("stage", target.value, {"deal": deal_id, "from": deal.stage.value, "to": target.value,
+                                                     "why": reason or "exit criteria met"})
         self._crm.log(deal_id, "stage_change", summary, {"from": deal.stage.value, "to": target.value})
         self._audit.record(self.name, "stage_changed", deal_id=deal_id, detail=summary)
         return [summary]
+
+    def _hold(self, event: Event, why: str, steps: list[str] | None = None) -> EventReport:
+        self._held.hold(event)
+        self._audit.record(self.name, "event_held", action_id=event.id, detail=f"{why}: {event.type.value}")
+        return EventReport(event_id=event.id, status="held",
+                           steps=(steps or []) + [f"{why}: {event.type.value} held until release, nothing lost"])
 
     def _flag(self, deal: Deal, flag: str, detail: str) -> list[str]:
         action = Action(id=f"flag_deal:{deal.id}:{flag}", type=ActionType.FLAG_DEAL, agent=self.name,

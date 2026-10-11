@@ -35,14 +35,14 @@ def test_brand_demo_runs_end_to_end(tmp_path):
 
 
 def test_rejecting_in_the_prompt_sends_nothing(tmp_path):
-    answers = iter(["n"] + ["y"] * 10)
+    answers = iter(["n", ""] + ["y"] * 10)  # reject Maya's email, no feedback: no redraft
     code, output = demo(tmp_path, ask=lambda prompt: next(answers))
 
     assert code == 0
     assert "Rejected by demo-reviewer@cool.example: send_email:D-001:first_touch" in output
-    # BrightBite never reaches "outreach": no email was sent (the scripted reply still arrives later)
-    assert "Stage scored -> replied" in output
-    assert "Stage scored -> outreach\n" not in output.split("=== 2.")[0]
+    # No email was sent, so Maya's scripted reply can't be a reply to us: flagged, stage unchanged
+    assert "Reply without outreach: flagged for a human, stage unchanged, nothing learned" in output
+    assert "Stage scored -> replied" not in output
 
 
 def test_demo_starts_fresh_each_time(tmp_path):
@@ -79,5 +79,5 @@ def test_rejecting_the_io_means_nothing_to_sign(tmp_path):
 
     assert code == 0
     assert "Rejected by demo-reviewer@cool.example: send_io:D-001:IO-D-001" in output
-    assert "E-signature webhook" not in output
+    assert "No IO was sent, so there is nothing to sign." in output
     assert "D-001  BrightBite Burgers     A       97  proposal" in output

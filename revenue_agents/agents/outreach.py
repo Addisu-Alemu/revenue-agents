@@ -7,7 +7,9 @@ draft: phrases the pack forbids are rejected (one retry with feedback), and
 only lessons that were actually offered can be cited.
 
 The agent proposes `send_email`. Whether it goes out automatically or waits
-for a human is the policy's decision (Tier A first touch waits).
+for a human is the policy's decision (Tier A first touch waits). If a human
+rejects a draft with a note, the agent writes the next version with that
+note as reviewer feedback.
 """
 
 from __future__ import annotations
@@ -25,14 +27,22 @@ from revenue_agents.segments import SegmentPack, SegmentRegistry
 
 MAX_ATTEMPTS = 2
 
+# The template already says "Hi {first_name},". If the model greets anyway, the greeting is removed.
+GREETING = re.compile(
+    r"^\s*(?:hi|hello|hey|dear|greetings|good (?:morning|afternoon|evening))\b(?:\s+[A-Z][\w.'-]*){0,3}\s*[,!:—-]\s*",
+    re.IGNORECASE,
+)
+
 SYSTEM_PROMPT = f"""You write the opening of first-touch sales emails for Cool AI, an AI advertising platform.
 
 {UNTRUSTED_RULES}
 
 Write `opening`: one or two sentences, specific to this company, based on its facts and buying signals.
+Don't start with a greeting (like "Hi Maya,") and don't sign off: the email template adds both.
 Pick `value_prop_index`: the number of the value proposition that fits this company best.
 Follow the tone you are given. No pricing, discounts or promises.
-If any of the lessons you are given shaped your choice, list their ids in `lessons_used`."""
+If any of the lessons you are given shaped your choice, list their ids in `lessons_used`.
+If a colleague reviewed a previous draft, their feedback comes first: follow it."""
 
 
 class OutreachDraft(Model):
@@ -49,6 +59,18 @@ class Email(Model):
     lessons_used: list[str]
 
 
+class Review(Model):
+    """A human rejected a draft and said why. The next draft must follow the feedback."""
+
+    feedback: str
+    previous_body: str
+    next_version: int
+
+    def as_prompt(self) -> str:
+        return (f"\n\nA colleague reviewed your previous draft and rejected it. Their feedback (follow it):\n"
+                f"{self.feedback}\n\nPrevious draft:\n{self.previous_body}")
+
+
 class DraftRejectedError(ValueError):
     """The model couldn't produce an acceptable draft within the allowed attempts."""
 
@@ -61,23 +83,26 @@ class OutreachAgent(Agent):
         self._segments = segments
         self._sender_name = sender_name
 
-    def run(self, lead: Lead, deal: Deal, enrichment: Enrichment, lessons: list[Lesson]) -> AgentResult[Email]:
+    def run(self, lead: Lead, deal: Deal, enrichment: Enrichment, lessons: list[Lesson],
+            review: Review | None = None) -> AgentResult[Email]:
         pack = self._segments.get(lead.segment)
         relevant = [lesson for lesson in lessons if lesson.segment == lead.segment and "outreach" in lesson.applies_to]
-        prompt = _prompt(lead, enrichment, pack, relevant)
+        prompt = _prompt(lead, enrichment, pack, relevant) + (review.as_prompt() if review else "")
+        version = review.next_version if review else 1
 
-        feedback = ""
+        retry_note = ""
         for _ in range(MAX_ATTEMPTS):
-            draft = self._llm.complete(system=SYSTEM_PROMPT, prompt=prompt + feedback, schema=OutreachDraft)
+            draft = self._llm.complete(system=SYSTEM_PROMPT, prompt=prompt + retry_note, schema=OutreachDraft)
             email, problems = self._render(lead, pack, draft, {lesson.id for lesson in relevant})
             if not problems:
                 action = self.propose(
-                    ActionType.SEND_EMAIL, deal, key="first_touch",
-                    summary=f"First email to {lead.contact.name} at {lead.company}",
+                    ActionType.SEND_EMAIL, deal, key="first_touch" if version == 1 else f"first_touch:v{version}",
+                    summary=f"First email to {lead.contact.name} at {lead.company}"
+                            + (f" (draft v{version}, after review)" if version > 1 else ""),
                     payload=email.model_dump(mode="json"),
                 )
                 return AgentResult(output=email, actions=[action])
-            feedback = "\n\nYour previous draft was rejected: " + "; ".join(problems) + ". Fix this."
+            retry_note = "\n\nYour previous draft was rejected: " + "; ".join(problems) + ". Fix this."
 
         raise DraftRejectedError(f"No acceptable draft for {lead.company}: {'; '.join(problems)}")
 
@@ -90,9 +115,10 @@ class OutreachAgent(Agent):
             value_prop = pack.messaging.value_props[draft.value_prop_index]
 
         first_name = lead.contact.name.split()[0]
+        opening = _without_greeting(draft.opening)
         subject = pack.templates.first_touch_subject.format(company=lead.company, first_name=first_name)
         body = pack.templates.first_touch_body.format(
-            company=lead.company, first_name=first_name, opening=draft.opening.strip(), value_prop=value_prop,
+            company=lead.company, first_name=first_name, opening=opening, value_prop=value_prop,
             call_to_action=pack.messaging.call_to_action, sender_name=self._sender_name,
         )
 
@@ -122,6 +148,12 @@ def _prompt(lead: Lead, enrichment: Enrichment, pack: SegmentPack, lessons: list
         f"Lessons learned from past calls and replies:\n{lesson_lines}\n\n"
         f"Company facts:\n{wrap_untrusted(facts, f'enrichment:{lead.domain}')}"
     )
+
+
+def _without_greeting(opening: str) -> str:
+    """Safety net for the prompt rule: drop a leading "Hi Maya," and capitalise what's left."""
+    text = GREETING.sub("", opening.strip(), count=1)
+    return text[:1].upper() + text[1:] if text else opening.strip()
 
 
 def _forbidden_phrases(text: str, phrases: list[str]) -> list[str]:

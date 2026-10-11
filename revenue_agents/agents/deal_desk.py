@@ -42,7 +42,7 @@ class DealDeskAgent(Agent):
 
     def __init__(self, segments: SegmentRegistry, template: Path = TEMPLATE, seller: Seller = Seller()) -> None:
         self._segments = segments
-        self._template = Path(template).read_text()
+        self._template = Path(template).read_text(encoding="utf-8")
         self._seller = seller
 
     def run(self, lead: Lead, deal: Deal, today: dt.date | None = None) -> AgentResult[IODraft]:

@@ -17,13 +17,16 @@ Stuck claims are listed by ActionClaims.in_progress() for review.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from revenue_agents.guardrails.approvals import ApprovalQueue, ApprovalStatus
 from revenue_agents.guardrails.audit import AuditLog
 from revenue_agents.guardrails.claims import ActionClaims
 from revenue_agents.guardrails.policy import Action, ActionType, AutonomyPolicy, Decision
 from revenue_agents.models import Deal, Model
+
+if TYPE_CHECKING:
+    from revenue_agents.tracing import Tracer
 
 Handler = Callable[[Action], Any]
 
@@ -50,12 +53,14 @@ class ActionGateway:
         audit: AuditLog,
         handlers: dict[ActionType, Handler],
         claims: ActionClaims | None = None,
+        tracer: Tracer | None = None,
     ) -> None:
         self._policy = policy
         self._approvals = approvals
         self._audit = audit
         self._handlers = handlers
         self._claims = claims or ActionClaims()
+        self._tracer = tracer
 
     def submit(self, action: Action, deal: Deal) -> ActionResult:
         """An agent proposes an action. The policy decides what happens to it."""
@@ -64,6 +69,7 @@ class ActionGateway:
 
         decision = self._policy.decide(action, deal)
         self._log(action, f"policy_{decision.decision.value}", f"[{decision.rule}] {decision.reason}")
+        self._trace("policy", action, decision=decision.decision.value, rule=decision.rule, reason=decision.reason)
 
         if decision.decision is Decision.AUTO:
             return self._execute(action, decision.reason)
@@ -81,6 +87,8 @@ class ActionGateway:
             return self._duplicate(request.action)
 
         decision = self._policy.decide(request.action, deal)
+        self._trace("policy", request.action, decision=f"{decision.decision.value} (re-check before running an approved "
+                    f"action)", rule=decision.rule, reason=decision.reason)
         if decision.decision is Decision.BLOCKED:
             self._log(request.action, "policy_blocked", f"[{decision.rule}] {decision.reason}")
             return ActionResult(action_id=request.action.id, outcome=Outcome.BLOCKED, reason=decision.reason)
@@ -106,11 +114,16 @@ class ActionGateway:
 
         self._claims.complete(action.id)
         self._log(action, "executed", reason)
+        self._trace("action", action, outcome="executed", reason=reason)
         return ActionResult(action_id=action.id, outcome=Outcome.EXECUTED, reason=reason, result=result)
 
     def _duplicate(self, action: Action) -> ActionResult:
         self._log(action, "duplicate_ignored", "Action already executed or in progress")
         return ActionResult(action_id=action.id, outcome=Outcome.DUPLICATE, reason="Action already executed or in progress")
+
+    def _trace(self, kind: str, action: Action, **data: Any) -> None:
+        if self._tracer is not None:
+            self._tracer.record(kind, action.type.value, {"agent": action.agent, "action_id": action.id, **data})
 
     def _log(self, action: Action, event: str, detail: str) -> None:
         self._audit.record(action.agent, event, deal_id=action.deal_id, action_id=action.id, detail=detail)

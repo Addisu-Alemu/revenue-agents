@@ -220,7 +220,7 @@ class SegmentRegistry:
             raise SegmentNotFoundError(f"no config pack for segment '{name}'. Available: {available}")
 
         try:
-            pack = SegmentPack.model_validate(yaml.safe_load(path.read_text()) or {})
+            pack = SegmentPack.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
         except (yaml.YAMLError, ValidationError) as error:
             raise SegmentConfigError(f"{path.name} is invalid:\n{error}") from error
 

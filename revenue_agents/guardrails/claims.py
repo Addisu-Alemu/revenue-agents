@@ -34,7 +34,7 @@ class ActionClaims:
             fd = os.open(self._path(action_id), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
             return False
-        with os.fdopen(fd, "w") as file:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
             json.dump({"action_id": action_id, "status": ClaimStatus.IN_PROGRESS.value, "at": str(utc_now())}, file)
         return True
 

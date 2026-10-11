@@ -4,3 +4,4 @@ pydantic
 pytest
 pytest-cov
 python-dotenv
+streamlit

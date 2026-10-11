@@ -30,7 +30,7 @@ class JsonEnricher:
     """Mock enrichment provider backed by a JSON file keyed by company domain."""
 
     def __init__(self, path: Path = DATA_DIR / "enrichment.json") -> None:
-        records = json.loads(Path(path).read_text())
+        records = json.loads(Path(path).read_text(encoding="utf-8"))
         self._records = {domain: Enrichment.model_validate(record) for domain, record in records.items()}
 
     def enrich(self, lead: Lead) -> Enrichment:
