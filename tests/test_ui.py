@@ -201,7 +201,9 @@ def test_call_brief_is_visible_in_the_log_with_a_shortcut_to_the_deal():
     at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
     button(at, "Next: New lead: BrightBite").click().run()
     button(at, "Approve").click().run()
-    button(at, "Next: Reply R-001").click().run()
+    button(at, "Next: Reply R-000").click().run()  # Maya's question
+    button(at, "Approve").click().run()  # our answer
+    button(at, "Next: Reply R-001").click().run()  # her meeting request
 
     assert not at.exception
     assert "View call brief" in [e.label for e in at.expander]

@@ -74,7 +74,7 @@ def test_make_llm_modes():
 
 
 def test_rejecting_the_io_means_nothing_to_sign(tmp_path):
-    answers = iter(["y", "n"] + ["y"] * 10)  # approve Maya's email, reject the IO
+    answers = iter(["y", "y", "n"] + ["y"] * 10)  # approve Maya's email and our answer, reject the IO
     code, output = demo(tmp_path, ask=lambda prompt: next(answers))
 
     assert code == 0

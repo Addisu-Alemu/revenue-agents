@@ -66,6 +66,12 @@ def test_meeting_request_is_classified_and_flagged(replies, leads, make_deal, po
     assert all_auto(policy, result, make_deal(stage=Stage.OUTREACH))
 
 
+@pytest.mark.parametrize("general, scope", [(False, "segment"), (True, "global")])
+def test_reply_lesson_scope_follows_the_model(replies, leads, make_deal, general, scope):
+    result, _ = triage(replies, leads, make_deal, "R-001", {**MAYA_MEETING, "lesson_is_general": general}, "L-001")
+    assert result.output.lesson.scope == scope
+
+
 def test_pricing_request_is_flagged_even_if_model_misses_it(replies, leads, make_deal):
     result, _ = triage(replies, leads, make_deal, "R-002", SAM_OBJECTION, "L-005")
     assert result.output.flags == ["objection", "pricing_requested"]
@@ -114,10 +120,19 @@ def test_call_becomes_deal_fields_and_lessons(transcript, leads, segments, make_
     assert intel.fields.flight_start == dt.date(2027, 1, 15)
     assert intel.fields.decision_maker == "Ken Adeyemi (CFO)"
     assert intel.flags == []
-    assert len(intel.lessons) == 2
+    assert len(intel.lessons) == 3
     assert intel.lessons[0].source == "call"
-    assert [a.type for a in result.actions] == [ActionType.UPDATE_DEAL, ActionType.RECORD_LESSON, ActionType.RECORD_LESSON]
+    assert [a.type for a in result.actions] == [ActionType.UPDATE_DEAL] + [ActionType.RECORD_LESSON] * 3
     assert all_auto(policy, result, make_deal(stage=Stage.MEETING))
+
+
+def test_general_call_lessons_are_global_and_the_rest_stay_in_the_segment(transcript, leads, segments, make_deal):
+    result, _ = call_intel(transcript, leads, segments, make_deal, BRIGHTBITE_CALL)
+    scopes = {lesson.id: lesson.scope for lesson in result.output.lessons}
+
+    assert scopes == {"lesson:L-001_discovery_call:0": "segment",
+                      "lesson:L-001_discovery_call:g0": "global", "lesson:L-001_discovery_call:g1": "global"}
+    assert all(lesson.segment == "brand" for lesson in result.output.lessons)  # where it was learned
 
 
 def test_call_prompt_lists_segment_products_and_wraps_transcript(transcript, leads, segments, make_deal):

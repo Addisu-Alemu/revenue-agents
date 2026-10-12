@@ -102,7 +102,7 @@ class NullTracer(Tracer):
 
 
 class TracedAgent:
-    """Records every run() of the wrapped agent. Everything else passes straight through."""
+    """Records every run() (and the outreach agent's answer()) of the wrapped agent. Everything else passes through."""
 
     def __init__(self, agent: Any, tracer: Tracer) -> None:
         self._agent = agent
@@ -112,11 +112,17 @@ class TracedAgent:
         return getattr(self._agent, name)
 
     def run(self, *args: Any, **kwargs: Any) -> Any:
+        return self._traced(self._agent.run, *args, **kwargs)
+
+    def answer(self, *args: Any, **kwargs: Any) -> Any:
+        return self._traced(self._agent.answer, *args, **kwargs)
+
+    def _traced(self, method: Any, *args: Any, **kwargs: Any) -> Any:
         start = time.perf_counter()
         inputs = [describe(value) for value in (*args, *kwargs.values())]
         self._tracer.notify("agent_start", self._agent.name, {"inputs": inputs})
         try:
-            result = self._agent.run(*args, **kwargs)
+            result = method(*args, **kwargs)
         except Exception as error:
             self._tracer.record("agent", self._agent.name, {"inputs": inputs, "error": f"{type(error).__name__}: {error}"},
                                 _ms(start))

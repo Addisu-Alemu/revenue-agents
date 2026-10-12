@@ -64,7 +64,7 @@ class CallBriefAgent(Agent):
 
     def run(self, lead: Lead, deal: Deal, timeline: list[Activity], lessons: list[Lesson]) -> AgentResult[CallBrief]:
         pack = self._segments.get(lead.segment)
-        relevant = [lesson for lesson in lessons if lesson.segment == lead.segment and "call_brief" in lesson.applies_to]
+        relevant = [lesson for lesson in lessons if lesson.applies_in(lead.segment) and "call_brief" in lesson.applies_to]
         replies = [activity.data.get("classification", {}) for activity in timeline if activity.kind == "reply"]
 
         brief = CallBrief(

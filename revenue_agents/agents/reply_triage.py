@@ -31,8 +31,11 @@ Cool AI is an AI advertising platform (creative automation, media activation, me
 Classify the reply's intent as one of: meeting_request, interested, objection, not_now, unsubscribe, other.
 Set asks_for_pricing to true if the sender asks about price, rates, costs or a rate card.
 List any objections in a few words each. Suggest one concrete next step for the sales rep.
+If the sender asks us a question about the product that we should answer before going further, put it in
+`question` in one sentence; otherwise leave it empty. A meeting request on its own is not a question.
 If the reply teaches something reusable about selling to this kind of company, write it as a one-sentence
-lesson; otherwise leave lesson empty."""
+lesson; otherwise leave lesson empty. Set lesson_is_general to true if the lesson would help sell to any
+kind of customer (e.g. objection handling), not just this kind of company."""
 
 
 class ReplyClassification(Model):
@@ -41,7 +44,9 @@ class ReplyClassification(Model):
     asks_for_pricing: bool
     objections: list[str] = Field(default_factory=list)
     suggested_next_step: str
+    question: str | None = None  # a product question the sender wants answered before going further
     lesson: str | None = None
+    lesson_is_general: bool = False  # true: the lesson applies to every segment
 
 
 class ReplyTriage(Model):
@@ -72,7 +77,8 @@ class ReplyTriageAgent(Agent):
         lesson = None
         if classification.lesson and not signals:
             lesson = Lesson(id=f"lesson:reply:{reply.id}", segment=lead.segment, source="reply",
-                            source_id=reply.id, text=classification.lesson, created_at=utc_now())
+                            source_id=reply.id, text=classification.lesson, created_at=utc_now(),
+                            scope="global" if classification.lesson_is_general else "segment")
 
         triage = ReplyTriage(reply_id=reply.id, classification=classification, flags=flags,
                              injection_signals=signals, lesson=lesson)

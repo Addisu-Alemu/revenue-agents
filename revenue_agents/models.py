@@ -189,7 +189,11 @@ class Deal(Model):
 
 
 class Lesson(Model):
-    """Something learned from a call or reply that should shape later work."""
+    """Something learned from a call or reply that should shape later work.
+
+    `segment` is where it was learned. `scope` says where it applies: "segment" (only there, e.g. a
+    franchise-specific insight) or "global" (every segment, e.g. how to handle a contract objection).
+    """
 
     id: str
     segment: str
@@ -197,4 +201,8 @@ class Lesson(Model):
     source_id: str  # e.g. the transcript or reply id, so every lesson is traceable
     text: str
     applies_to: list[str] = Field(default_factory=lambda: ["outreach", "call_brief"])
+    scope: Literal["segment", "global"] = "segment"
     created_at: dt.datetime
+
+    def applies_in(self, segment: str) -> bool:
+        return self.scope == "global" or self.segment == segment

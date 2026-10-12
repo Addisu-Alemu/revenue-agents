@@ -104,7 +104,7 @@ def test_digest_lists_todays_lessons_and_is_saved(tmp_path, system, transcript):
 
     report = system.orchestrator.handle(scheduled(EventType.DIGEST_DAILY, today))
 
-    assert "New lessons (2):" in report.steps
+    assert "New lessons (3):" in report.steps
     saved = json.loads((tmp_path / "digests" / f"{today.date()}.json").read_text())
     assert saved["pipeline"] == {"proposal": 1}
 
