@@ -13,6 +13,16 @@ from typing import Any
 from revenue_agents.llm import FakeLLM, LLMCall
 
 REPLY_ANSWERS: dict[str, dict[str, Any]] = {
+    "R-000": {
+        "intent": "interested",
+        "summary": "Interested, but burned by a template tool where franchisees went off-brand. Wants to know "
+                   "how corporate controls what franchisees can change.",
+        "asks_for_pricing": False,
+        "objections": ["past tool let franchisees go off-brand"],
+        "suggested_next_step": "Explain locked fields and the approval workflow, then offer a call.",
+        "question": "Can corporate control what franchisees are allowed to change in their local ads?",
+        "lesson": None,
+    },
     "R-001": {
         "intent": "meeting_request",
         "summary": "Wants a 30-minute call next week; CFO to join. Franchisees want local ad versions.",
@@ -57,7 +67,11 @@ CALL_ANSWERS: dict[str, dict[str, Any]] = {
         "objections": ["no long contracts"],
         "lessons": [
             "Franchise brands care more about brand control than speed: lead with locked fields and approval workflow.",
-            "CFOs at franchise brands prefer short pilots with an option to extend over 12-month commitments.",
+        ],
+        # Not specific to franchise brands: these reach every segment's outreach and call briefs.
+        "general_lessons": [
+            "Buyers burned by long vendor contracts respond to a short pilot with an option to extend.",
+            "When finance joins the call, show how return will be measured before discussing cost.",
         ],
     },
 }
@@ -114,5 +128,20 @@ def _outreach(call: LLMCall) -> dict[str, Any]:
     return {"opening": opening, "value_prop_index": value_prop, "lessons_used": [lid for lid, _ in offered[:1]]}
 
 
+# Answers to a prospect's question, by reply id.
+ANSWERS: dict[str, str] = {
+    "R-000": ("That's the problem we built this for. Corporate decides which fields franchisees can edit, like the "
+              "store address or a local offer, and everything else stays locked: logo, layout and brand colours. "
+              "Every franchisee version then goes through your approval rules before it runs."),
+}
+
+
+def _answer(call: LLMCall) -> dict[str, Any]:
+    match = re.search(r'source="reply:([^"]+)"', call.prompt)
+    text = ANSWERS.get(match.group(1) if match else "", "Thanks for the question. Happy to walk you through it.")
+    return {"answer": text, "lessons_used": []}
+
+
 def demo_llm() -> FakeLLM:
-    return FakeLLM({"ReplyClassification": _reply, "CallDigest": _call, "OutreachDraft": _outreach})
+    return FakeLLM({"ReplyClassification": _reply, "CallDigest": _call, "OutreachDraft": _outreach,
+                    "AnswerDraft": _answer})

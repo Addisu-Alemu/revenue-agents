@@ -121,6 +121,9 @@ class AutonomyPolicy:
         approval_tiers = self._segments.get(deal.segment).autonomy.first_touch_approval_tiers
         if first_touch and deal.score.tier in approval_tiers:
             return _approval("first_touch_tier", f"First contact with a Tier {deal.score.tier.value} lead")
+        if deal.stage is Stage.REPLIED and deal.score.tier in approval_tiers:
+            # The agent is answering a top lead's own words (e.g. a product question): a human checks it.
+            return _approval("reply_to_top_tier", f"Answer to a Tier {deal.score.tier.value} lead's reply")
 
         return PolicyDecision(decision=Decision.AUTO, rule="low_risk_email", reason="Email to a lower-risk lead")
 

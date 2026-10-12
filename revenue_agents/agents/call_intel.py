@@ -29,7 +29,9 @@ Extract only what was actually said. Leave a field empty if it wasn't discussed;
 - decision_maker: who signs the contract, as "Name (Title)".
 List the customer's pains and objections in a few words each.
 Write up to three lessons: reusable, one-sentence insights about selling to this kind of customer
-(not facts about this one deal)."""
+(not facts about this one deal).
+Put an insight in general_lessons instead (up to two) if it would help sell to any kind of customer,
+e.g. how to handle a contract, budget or timing objection. Never write the same insight in both lists."""
 
 
 class CallDigest(Model):
@@ -37,6 +39,7 @@ class CallDigest(Model):
     pains: list[str] = Field(default_factory=list)
     objections: list[str] = Field(default_factory=list)
     lessons: list[str] = Field(default_factory=list, max_length=3)
+    general_lessons: list[str] = Field(default_factory=list, max_length=2)  # apply to every segment
 
 
 class CallIntel(Model):
@@ -73,6 +76,10 @@ class CallIntelAgent(Agent):
             Lesson(id=f"lesson:{transcript_id}:{i}", segment=lead.segment, source="call",
                    source_id=transcript_id, text=text, created_at=utc_now())
             for i, text in enumerate(digest.lessons)
+        ] + [
+            Lesson(id=f"lesson:{transcript_id}:g{i}", segment=lead.segment, source="call",
+                   source_id=transcript_id, text=text, scope="global", created_at=utc_now())
+            for i, text in enumerate(digest.general_lessons)
         ]
         intel = CallIntel(transcript_id=transcript_id, fields=fields, pains=digest.pains,
                           objections=digest.objections, flags=flags, lessons=lessons)

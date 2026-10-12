@@ -20,8 +20,9 @@ def store(tmp_path):
     return LessonStore(tmp_path / "lessons.json")
 
 
-def lesson(lesson_id, segment="brand", day=1, applies_to=("outreach", "call_brief")):
+def lesson(lesson_id, segment="brand", day=1, applies_to=("outreach", "call_brief"), scope="segment"):
     return Lesson(id=lesson_id, segment=segment, source="call", source_id="call-1", text=f"Lesson {lesson_id}",
+                  scope=scope,
                   applies_to=list(applies_to), created_at=dt.datetime(2026, 10, day, tzinfo=dt.timezone.utc))
 
 
@@ -125,6 +126,16 @@ def test_for_segment_filters_and_sorts_newest_first(store):
     assert [l.id for l in store.for_segment("brand")] == ["new", "old"]
     assert [l.id for l in store.for_segment("brand", purpose="call_brief")] == ["brief-only", "new", "old"]
     assert [l.id for l in store.for_segment("brand", limit=1)] == ["new"]
+
+
+def test_global_lessons_reach_every_segment(store):
+    store.add(lesson("brand-only", day=1))
+    store.add(lesson("from-brand", day=2, scope="global"))
+    store.add(lesson("from-agency", segment="agency", day=3, scope="global"))
+
+    assert [l.id for l in store.for_segment("agency")] == ["from-agency", "from-brand"]
+    assert [l.id for l in store.for_segment("brand")] == ["from-agency", "from-brand", "brand-only"]
+    assert [l.id for l in store.for_segment("publisher")] == ["from-agency", "from-brand"]  # even a new segment
 
 
 def test_lesson_uses_are_traceable(tmp_path, store):

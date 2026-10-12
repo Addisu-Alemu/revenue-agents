@@ -66,8 +66,15 @@ def test_first_email_to_lower_tiers_is_automatic(policy, make_deal, tier):
     assert policy.decide(email(), make_deal(stage=Stage.SCORED, tier=tier)).decision is Decision.AUTO
 
 
-def test_follow_up_email_to_tier_a_is_automatic(policy, make_deal):
-    assert policy.decide(email(), make_deal(stage=Stage.REPLIED, tier=Tier.A)).decision is Decision.AUTO
+def test_answer_to_a_tier_a_reply_needs_approval(policy, make_deal):
+    """The agent answering a top lead's own question is checked by a human."""
+    decision = policy.decide(email(), make_deal(stage=Stage.REPLIED, tier=Tier.A))
+    assert decision.decision is Decision.NEEDS_APPROVAL
+    assert decision.rule == "reply_to_top_tier"
+
+
+def test_answer_to_a_tier_b_reply_is_automatic(policy, make_deal):
+    assert policy.decide(email(), make_deal(stage=Stage.REPLIED, tier=Tier.B)).decision is Decision.AUTO
 
 
 def test_email_to_unscored_lead_needs_approval(policy, make_deal):

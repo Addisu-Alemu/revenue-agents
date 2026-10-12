@@ -24,7 +24,9 @@ def to_meeting(system):
     steps = story.plan(system.crm.leads(), "brand")
     story.run(system, steps[0])
     system.orchestrator.handle(story.approval_event("send_email:D-001:first_touch", True, REVIEWER))
-    return story.run(system, steps[1]), steps
+    story.run(system, steps[1])  # Maya's question
+    system.orchestrator.handle(story.approval_event("send_email:D-001:reply:R-000", True, REVIEWER))
+    return story.run(system, steps[2]), steps  # her meeting request
 
 
 def briefs(system, deal_id="D-001"):

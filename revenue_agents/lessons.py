@@ -1,7 +1,8 @@
 """Lesson store: the knowledge loop's memory.
 
 Lessons come from calls and replies (each one records its source). Agents ask
-for the lessons relevant to a segment and purpose, and every time a lesson
+for the lessons relevant to a segment and purpose: that segment's own lessons
+plus global ones learned in any segment. Every time a lesson
 shapes an email, that use is recorded. So a lesson can be traced from the
 call where it was learned to the emails it influenced.
 """
@@ -41,8 +42,8 @@ class LessonStore:
         return [Lesson.model_validate(item) for item in self._read()["lessons"].values()]
 
     def for_segment(self, segment: str, purpose: str = "outreach", limit: int = 5) -> list[Lesson]:
-        """The newest lessons for this segment and purpose."""
-        matching = [lesson for lesson in self.all() if lesson.segment == segment and purpose in lesson.applies_to]
+        """The newest lessons for this segment and purpose, including global lessons learned in any segment."""
+        matching = [lesson for lesson in self.all() if lesson.applies_in(segment) and purpose in lesson.applies_to]
         return sorted(matching, key=lambda lesson: lesson.created_at, reverse=True)[:limit]
 
     def record_use(self, lesson_ids: list[str], used_in: str, deal_id: str) -> None:

@@ -73,6 +73,17 @@ def test_lessons_are_offered_and_their_use_is_recorded(leads, enricher, segments
     assert result.actions[0].payload["lessons_used"] == ["lesson:call-1:0"]
 
 
+def test_global_lessons_from_another_segment_are_offered(leads, enricher, segments, make_deal):
+    shared = AGENCY_LESSON.model_copy(update={"id": "lesson:call-2:g0", "text": "Offer a short pilot.", "scope": "global"})
+    answer = {**GOOD_DRAFT, "lessons_used": ["lesson:call-2:g0"]}
+    result, llm, _ = draft(leads, enricher, segments, make_deal, answer=answer, lessons=(AGENCY_LESSON, shared))
+
+    prompt = llm.calls[0].prompt
+    assert "[lesson:call-2:g0] Offer a short pilot." in prompt
+    assert "Agency tip." not in prompt
+    assert result.output.lessons_used == ["lesson:call-2:g0"]
+
+
 def test_model_cannot_cite_lessons_it_was_not_given(leads, enricher, segments, make_deal):
     answer = {**GOOD_DRAFT, "lessons_used": ["lesson:call-1:0", "lesson:made-up"]}
     result, _, _ = draft(leads, enricher, segments, make_deal, answer=answer)
@@ -218,3 +229,47 @@ def test_words_that_merely_start_like_a_greeting_are_kept(leads, enricher, segme
 def test_prompt_tells_the_model_not_to_greet(leads, enricher, segments, make_deal):
     _, llm, _ = draft(leads, enricher, segments, make_deal)
     assert "Don't start with a greeting" in llm.calls[0].system
+
+
+def test_prompt_tells_the_model_not_to_repeat_the_value_prop(leads, enricher, segments, make_deal):
+    """Found on a real Claude run: the opening restated the value prop that the template prints right after it."""
+    _, llm, _ = draft(leads, enricher, segments, make_deal)
+    assert "Don't describe what Cool AI does or restate a value" in llm.calls[0].system
+
+
+# --- Lessons must be visibly used -------------------------------------------------------
+
+
+def test_a_draft_that_ignores_offered_lessons_is_asked_once_to_apply_one(leads, enricher, segments, make_deal):
+    """Found on a real Claude run: offered five lessons, it cited none, so the loop never showed."""
+    answers = iter([{**GOOD_DRAFT, "lessons_used": []}, GOOD_DRAFT])
+    result, llm, _ = draft(leads, enricher, segments, make_deal, answer=lambda call: next(answers))
+
+    assert len(llm.calls) == 2
+    assert "applied none" in llm.calls[1].prompt
+    assert result.output.lessons_used == ["lesson:call-1:0"]
+
+
+def test_ignoring_lessons_twice_still_sends_the_email(leads, enricher, segments, make_deal):
+    """The nudge improves the email; it never blocks it."""
+    result, llm, _ = draft(leads, enricher, segments, make_deal, answer={**GOOD_DRAFT, "lessons_used": []})
+
+    assert len(llm.calls) == 2
+    assert result.output.lessons_used == []
+    assert result.actions[0].type is ActionType.SEND_EMAIL
+
+
+def test_no_lesson_nudge_when_no_lessons_were_offered(leads, enricher, segments, make_deal):
+    _, llm, _ = draft(leads, enricher, segments, make_deal, answer={**GOOD_DRAFT, "lessons_used": []}, lessons=())
+    assert len(llm.calls) == 1
+
+
+def test_lesson_nudge_does_not_use_up_the_forbidden_phrase_retry(leads, enricher, segments, make_deal):
+    answers = iter([{**GOOD_DRAFT, "lessons_used": []},
+                    {**GOOD_DRAFT, "opening": "We guarantee results for all 420 locations."},
+                    GOOD_DRAFT])
+    result, llm, _ = draft(leads, enricher, segments, make_deal, answer=lambda call: next(answers))
+
+    assert len(llm.calls) == 3
+    assert "guarantee" not in result.output.body.lower()
+    assert result.output.lessons_used == ["lesson:call-1:0"]

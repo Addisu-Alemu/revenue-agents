@@ -3,10 +3,13 @@
 import pytest
 
 from revenue_agents.demo import run
+from revenue_agents.demo_llm import demo_llm
+from revenue_agents.events import Event, EventType
 from revenue_agents.guardrails.kill_switch import KillSwitch
 from revenue_agents.guardrails.policy import Action, ActionType, AutonomyPolicy, Decision
 from revenue_agents.models import Stage, Tier
 from revenue_agents.skills.scoring import score_lead
+from revenue_agents.system import build_system
 
 
 @pytest.fixture
@@ -62,3 +65,18 @@ def test_agency_demo_runs_end_to_end(tmp_path):
     assert "queued (First contact with a Tier B lead)" in output  # Copperline: agency rule
     assert "Tier C: no outreach, left for nurture" in output  # Solo Studio
     assert "Flags: objection, pricing_requested" in output  # Sam's reply
+
+
+def test_a_global_lesson_from_a_brand_call_shapes_agency_outreach(tmp_path, transcript):
+    system = build_system(demo_llm(), state_dir=tmp_path)
+    system.orchestrator.handle(Event(id="lead:L-001", type=EventType.LEAD_CREATED, payload={"lead_id": "L-001"}))
+    system.orchestrator.handle(Event(id="call:1", type=EventType.CALL_COMPLETED, payload={
+        "lead_id": "L-001", "transcript_id": "L-001_discovery_call", "transcript": transcript}))
+
+    system.orchestrator.handle(Event(id="lead:L-004", type=EventType.LEAD_CREATED, payload={"lead_id": "L-004"}))
+
+    [email] = [r.action for r in system.approvals.pending() if r.action.deal_id == "D-004"]
+    [used] = email.payload["lessons_used"]
+    lesson = next(lesson for lesson in system.lessons.all() if lesson.id == used)
+    assert (lesson.segment, lesson.scope) == ("brand", "global")  # learned on a brand call, used for an agency
+    assert "lesson:L-001_discovery_call:0" not in email.payload["lessons_used"]  # franchise-only lesson stays out

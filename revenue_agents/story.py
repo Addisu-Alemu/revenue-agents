@@ -1,7 +1,8 @@
 """The demo story: which events happen, in what order. Shared by the terminal demo and the UI.
 
 The order is driven by the data, not by segment-specific code:
-  1. the first lead that has a call transcript: lead -> its replies -> its call -> IO -> signature
+  1. the first lead that has a call transcript: lead -> its replies (a question, our answer, then a
+     meeting request) -> its call -> IO -> signature
   2. every other lead in the segment, then their replies
   3. a few days later: the scheduled SLA check and daily digest
 So the lesson learned on the call is available when the later emails are drafted.
@@ -55,8 +56,10 @@ def plan(leads: list[Lead], segment: str, days_later: int = 6) -> list[Step]:
     first = next((lead for lead in in_segment if lead.id in transcripts), None)
     if first:
         steps.append(_lead_step(first))
-        steps += [Step("reply", f"Reply {r.id} from {names.get(r.lead_id, r.sender)}", reply=r, show_duplicate=True)
-                  for r in replies if r.lead_id == first.id]
+        first_replies = [r for r in replies if r.lead_id == first.id]
+        # The last reply (the meeting request) is also delivered twice, to show at-least-once delivery.
+        steps += [Step("reply", f"Reply {r.id} from {names.get(r.lead_id, r.sender)}", reply=r,
+                       show_duplicate=r is first_replies[-1]) for r in first_replies]
         steps.append(Step("call", f"Call transcript ready (Fireflies): {transcripts[first.id].name}", lead=first,
                           transcript=transcripts[first.id]))
         steps.append(Step("signature", f"E-signature webhook for {first.company}'s IO", lead=first))

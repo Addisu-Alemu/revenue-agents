@@ -2,9 +2,9 @@
 
 An agentic revenue system for Cool AI: single-purpose AI agents, coordinated by an orchestrator, that move a lead from **prospect → enrich → score → outreach → reply → meeting → qualify → proposal / IO → signature → handoff**. Risky steps wait for a human, and that rule is enforced in code. Built on the Claude Agent SDK, with HubSpot mocked as the system of record.
 
-Design: [docs/DESIGN.md](docs/DESIGN.md)
+Design document: https://claude.ai/artifact/NN3rv38qkcyhZjwnuUUYDf
 
-> **Status: in progress.** Built so far: the full vertical slice for the brand segment (data models, segment config packs, enrichment and scoring, the autonomy policy with action gateway, approval queue, audit log and kill switch, the LLM layer, all six agents, mock HubSpot, the lesson store, the orchestrator with stage exit criteria, and the demo run), plus a second segment, agencies, added through `segments/agency.yaml` alone. It also covers tracking (stall detection, reminders, daily digest) and e-signature through to handoff. Next: the UI.
+> **Status: complete vertical slice.** Seven agents (research, scoring, outreach, reply triage, call brief, call intel, deal desk) coordinated by an orchestrator, with the autonomy policy, action gateway, approval queue, audit log, kill switch, stage tracking, daily digest and e-signature through to handoff. Two segments: brands, and agencies added through `segments/agency.yaml` alone. Runs in the terminal or in a browser UI, with real Claude or with scripted answers.
 
 ## Quick start with Docker (any OS: Windows, macOS, Linux)
 
@@ -62,15 +62,15 @@ python scripts/check_claude.py
 ## Run the demo
 
 ```bash
-python run_demo.py                  # fake model: scripted answers, no API key needed
 python run_demo.py --llm claude     # real Claude (needs ANTHROPIC_API_KEY with credit in .env)
+python run_demo.py                  # scripted model answers, no API key needed
 python run_demo.py --auto-approve   # don't pause at approvals
 python run_demo.py --segment agency # the agency segment (added with config only)
 ```
 
-The demo runs the brand segment's mock data through the real system: a new lead is enriched, scored and tiered; the Tier A first email **pauses for your approval**; Maya's reply moves the deal to a meeting, and a **call brief** is prepared for the rep (and a duplicate webhook is ignored); the call transcript fills the deal fields and produces lessons; the IO is drafted and **pauses for approval**, goes out for e-signature, a forged "signed" webhook is rejected and the real one closes the deal (handoff); the next brand lead's email **cites the lesson** from the call; Owen's prompt-injection reply is flagged; and six days later the SLA check flags a stalled deal and the daily digest prints. It ends with the pipeline, the knowledge loop and the audit log size.
+The demo runs the brand segment's mock data through the real system: a new lead is enriched, scored and tiered; the Tier A first email **pauses for your approval**; Maya replies with a question first (can corporate control what franchisees change?), the outreach agent drafts an answer that **pauses for approval** too, and her next reply asks for a meeting, so the deal moves to Meeting and a **call brief** is prepared for the rep (a duplicate webhook is ignored); the call transcript fills the deal fields and produces lessons, some for the brand segment and some **global** for every segment; the IO is drafted and **pauses for approval**, goes out for e-signature, a forged "signed" webhook is rejected and the real one closes the deal (handoff); the next brand lead's email **applies a lesson** from the call; Owen's prompt-injection reply is flagged; and six days later the SLA check flags a stalled deal and the daily digest prints. It ends with the pipeline, the knowledge loop and the audit log size. The whole conversation with Maya is stored as one email thread.
 
-In fake mode, model answers are scripted for the mock data (and the demo says so); everything else is the real code path. `--llm claude` never falls back to fake: if the key is missing or has no credit, it stops with an error. Demo state is written to `state/demo/` and reset on each run (`--keep-state` to keep it).
+Without `--llm claude`, model answers are scripted for the mock data (and the demo says so); everything else is the real code path. `--llm claude` never falls back to fake: if the key is missing or has no credit, it stops with an error. Demo state is written to `state/demo/` and reset on each run (`--keep-state` to keep it).
 
 ## UI
 
@@ -109,6 +109,7 @@ revenue_agents/
   demo.py            The live demo story; demo_llm.py holds the scripted model answers
   storage.py         Atomic, locked file storage for runtime state
   tracing.py         Agent trace: TracedAgent / TracingLLM wrappers record each step per event
+  ui/                Browser UI pages: live demo, agent trace, pipeline, deal detail, approvals
   skills/
     enrichment.py    Enricher interface + mock provider
     scoring.py       Fit / intent / engagement scoring with reasons, and tiers
@@ -122,10 +123,11 @@ revenue_agents/
     kill_switch.py   Emergency stop
 segments/            One YAML config pack per customer segment
 data/                Mock leads, enrichment, replies, call transcript, IO template
-run_demo.py          Entry point for the live demo
-scripts/             Other entry points (check_claude.py)
+run_demo.py          Entry point for the terminal demo
+app.py               Entry point for the browser UI (streamlit run app.py)
+scripts/             Other entry points (check_claude.py, kill_switch.py)
 tests/
-docs/DESIGN.md
+docs/DESIGN.md       Link to the design document
 state/               Runtime state (approvals, audit log, claims). Git-ignored.
 ```
 

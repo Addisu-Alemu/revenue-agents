@@ -15,9 +15,10 @@ while paused; the gateway guarantees nothing executes.
     lead.created     -> research -> scoring -> outreach (Tier A waits for approval)
     approval.decided -> execute the approved action; a rejected email with a note is redrafted
                         (max 2 redrafts), and the note can be saved as a lesson
-    reply.received   -> reply triage -> flags (meeting / pricing / injection / unsubscribe); a meeting
-                        request moves the deal to Meeting and prepares a call brief for the rep; a reply from a
-                        lead we never emailed is flagged and doesn't move the deal
+    reply.received   -> reply triage -> flags (meeting / pricing / injection / unsubscribe); a product question
+                        gets an answer drafted by outreach (top tiers wait for approval); a meeting request moves
+                        the deal to Meeting and prepares a call brief for the rep; a reply from a lead we never
+                        emailed is flagged and doesn't move the deal
     call.completed   -> call intel -> qualified? -> deal desk drafts IO (sending waits for approval)
     signature.completed -> verify the envelope with the e-sign provider -> close won -> handoff
     sla.check        -> flag stalled deals and remind the rep (once per deal and stage)
@@ -58,6 +59,12 @@ from revenue_agents.tracking import Tracker
 # Accepted even while the kill switch is on: human decisions are recorded (the gateway still blocks
 # execution), and the digest only reports.
 ACCEPTED_WHILE_PAUSED = frozenset({EventType.APPROVAL_DECIDED, EventType.DIGEST_DAILY})
+
+# A question in these replies gets an answer drafted (a concern phrased as a question counts as an objection).
+ANSWERABLE_INTENTS = frozenset({"interested", "objection"})
+
+# Replies with these flags are answered by a human, never drafted by an agent.
+HUMAN_ONLY_FLAGS = frozenset({"pricing_requested", "possible_prompt_injection"})
 
 # A first email can be redrafted twice after rejection; after that a human writes it.
 MAX_DRAFTS = 3
@@ -307,6 +314,9 @@ class Orchestrator:
         flags = set(self._crm.get_deal(deal.id).flags)
         if "unsubscribe" in triage.flags:
             return steps + self._advance(deal.id, Stage.CLOSED_LOST, reason="contact unsubscribed")
+        question = triage.classification.question
+        if question and triage.classification.intent in ANSWERABLE_INTENTS and not HUMAN_ONLY_FLAGS & set(triage.flags):
+            steps += self._answer_question(lead, deal.id, reply, question)
         if "meeting_requested" in flags:
             steps += self._advance(deal.id, Stage.MEETING)
             if self._crm.get_deal(deal.id).stage is Stage.MEETING:
@@ -316,6 +326,21 @@ class Orchestrator:
         if "possible_prompt_injection" in triage.flags:
             steps.append("Suspicious content: ignored as instructions, no lesson learned")
         return steps
+
+    def _answer_question(self, lead, deal_id: str, reply: Reply, question: str) -> list[str]:
+        """The prospect asked something before agreeing to meet: the outreach agent drafts an answer.
+        Whether it goes out alone or waits for a human is the policy's call (top tiers wait)."""
+        deal = self._crm.get_deal(deal_id)
+        lessons = self._lessons.for_segment(lead.segment, purpose="outreach")
+        try:
+            result = self._agents.outreach.answer(lead, deal, reply, question, lessons)
+        except DraftRejectedError as error:
+            return self._flag(deal, "outreach_draft_rejected", str(error))
+        if result.output.lessons_used:
+            lines = [f"Question to answer: {question}", f"Answer uses lessons: {', '.join(result.output.lessons_used)}"]
+        else:
+            lines = [f"Question to answer: {question}"]
+        return lines + self._submit(result.actions)
 
     def _email_answered_by(self, reply: Reply, deal: Deal) -> Message | None:
         """Which of our emails this reply answers: the exact one if the reply names it (In-Reply-To),

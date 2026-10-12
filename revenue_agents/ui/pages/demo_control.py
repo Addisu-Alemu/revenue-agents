@@ -106,7 +106,7 @@ def _run(system, step: story.Step) -> None:
 
 def _metrics(system) -> None:
     deals = components.segment_deals(system)
-    lessons = [lesson for lesson in system.lessons.all() if lesson.segment == st.session_state.segment]
+    lessons = [lesson for lesson in system.lessons.all() if lesson.applies_in(st.session_state.segment)]
     uses = [use for use in system.lessons.uses() if use.lesson_id in {lesson.id for lesson in lessons}]
     attention = sum(1 for deal in deals if components.needs_attention(deal))
     columns = st.columns(4)
