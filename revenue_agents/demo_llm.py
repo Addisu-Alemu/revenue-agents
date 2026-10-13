@@ -31,6 +31,15 @@ REPLY_ANSWERS: dict[str, dict[str, Any]] = {
         "suggested_next_step": "Offer Tuesday or Wednesday afternoon and invite the CFO.",
         "lesson": "Franchise marketers respond to the pain of slow local versions of national ads.",
     },
+    "R-004": {
+        "intent": "interested",
+        "summary": "Ken is ready to sign, but asks for Net 45 payment terms instead of Net 30.",
+        "asks_for_pricing": False,
+        "objections": [],
+        "suggested_next_step": "Send an updated IO with Net 45 once agreed internally.",
+        "contract_changes": [{"field": "payment_terms", "value": "Net 45"}],
+        "lesson": None,
+    },
     "R-002": {
         "intent": "objection",
         "summary": "Budget locked until Q1; worried pricing is higher than current flat-fee vendor.",
@@ -50,6 +59,23 @@ REPLY_ANSWERS: dict[str, dict[str, Any]] = {
 }
 
 CALL_ANSWERS: dict[str, dict[str, Any]] = {
+    # First call, Maya only: the need is clear, but budget, dates and terms wait for the CFO.
+    "L-001_intro_call": {
+        "deal_fields": {
+            "products": ["Create: Dynamic Creative Optimization", "Activate: Franchise & Location Targeting"],
+            "decision_maker": "Ken (CFO)",
+            "next_step": "Second call with Ken (CFO) this week: cost, measurement and contract length",
+        },
+        "pains": ["6 weeks to localize each campaign", "franchisees break brand guidelines"],
+        "objections": ["CFO wary of long vendor contracts"],
+        "lessons": [
+            "Franchise brands care more about brand control than speed: lead with locked fields and approval workflow.",
+        ],
+        "general_lessons": [
+            "When your contact can't approve the budget, ask early who signs and book the next call with them.",
+        ],
+    },
+    # Second call, with the CFO: everything the IO needs.
     "L-001_discovery_call": {
         "deal_fields": {
             "budget_usd": 250000,
@@ -63,10 +89,10 @@ CALL_ANSWERS: dict[str, dict[str, Any]] = {
             "special_terms": "Include example of the franchisee approval workflow",
             "next_step": "Send proposal and draft IO by Friday",
         },
-        "pains": ["6 weeks to localize each campaign", "franchisees break brand guidelines"],
+        "pains": ["need to measure return per location"],
         "objections": ["no long contracts"],
         "lessons": [
-            "Franchise brands care more about brand control than speed: lead with locked fields and approval workflow.",
+            "Franchise CFOs judge a pilot on results per location: lead with location-level measurement.",
         ],
         # Not specific to franchise brands: these reach every segment's outreach and call briefs.
         "general_lessons": [

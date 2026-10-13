@@ -32,6 +32,7 @@ class ActionType(str, Enum):
     SEND_PRICING = "send_pricing"
     SEND_IO = "send_io"
     SEND_FOR_SIGNATURE = "send_for_signature"
+    VOID_IO = "void_io"  # withdraw an outdated IO so it can't be signed (protective, so low risk)
     CLOSE_DEAL = "close_deal"
 
 
@@ -70,7 +71,8 @@ AGENT_PERMISSIONS: dict[str, frozenset[ActionType]] = {
         {ActionType.DRAFT_IO, ActionType.SEND_PRICING, ActionType.SEND_IO, ActionType.SEND_FOR_SIGNATURE}
     ),
     "orchestrator": frozenset(
-        {ActionType.UPDATE_DEAL, ActionType.FLAG_DEAL, ActionType.CLOSE_DEAL, ActionType.RECORD_LESSON}
+        {ActionType.UPDATE_DEAL, ActionType.FLAG_DEAL, ActionType.CLOSE_DEAL, ActionType.RECORD_LESSON,
+         ActionType.VOID_IO}
     ),
 }
 

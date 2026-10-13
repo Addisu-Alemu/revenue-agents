@@ -23,6 +23,7 @@ class EventType(str, Enum):
     CALL_COMPLETED = "call.completed"  # Fireflies webhook: transcript ready
     APPROVAL_DECIDED = "approval.decided"  # a human approved or rejected in the queue
     SIGNATURE_COMPLETED = "signature.completed"  # e-sign webhook (DocuSign): an envelope was signed
+    TERMS_CHANGED = "terms.changed"  # a rep changed the deal's commercial terms (UI): the IO is redrafted
     SLA_CHECK = "sla.check"  # scheduler (e.g. every morning): find stalled deals, send reminders
     DIGEST_DAILY = "digest.daily"  # scheduler (daily): summary for the sales team
 

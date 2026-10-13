@@ -179,7 +179,8 @@ def test_reject_and_redraft_from_the_ui_with_a_lesson(isolated_state):
     at = page("demo")
     button(at, "Next: New lead: BrightBite").click().run()
 
-    at.text_input[0].input("Lead with the operational pain, not congratulations").run()
+    feedback = next(box for box in at.text_input if box.label == "Feedback for a redraft")
+    feedback.input("Lead with the operational pain, not congratulations").run()
     at.checkbox[0].check().run()
     button(at, "Reject & redraft").click().run()
 
@@ -307,3 +308,62 @@ def test_conversation_shows_a_draft_waiting_for_approval(isolated_state):
     button(at, "Next: New lead: BrightBite").click().run()
     deal = page("deal")
     assert any("Draft waiting for approval" in m.value for m in deal.markdown)
+
+
+def test_editing_an_email_in_the_ui_sends_the_edited_version(isolated_state):
+    at = page("demo")
+    button(at, "Next: New lead: BrightBite").click().run()
+
+    email = next(box for box in at.text_area if box.label == "Email")
+    email.input(email.value.replace("Would you be open to", "Could we find time for")).run()
+    button(at, "Approve with edits").click().run()
+
+    assert not at.exception
+    system = build_system(make_llm("fake"), state_dir=isolated_state)
+    [sent] = system.crm.messages("D-001")
+    assert "Could we find time for" in sent.body
+    assert system.approvals.get("send_email:D-001:first_touch").original_action is not None
+
+    deal = page("deal")
+    assert not deal.exception
+    assert "edited by" in texts(deal)
+    assert "Show the agent's original draft" in [e.label for e in deal.expander]
+
+
+def test_deal_page_shows_the_call_transcript_and_what_was_learned(isolated_state):
+    full_story(isolated_state)
+    deal = page("deal")
+
+    assert not deal.exception
+    assert "Call" in [tab.label for tab in deal.tabs]
+    transcripts = "\n".join(t.value for t in deal.text)
+    assert "Can we do a second call with him?" in transcripts  # the intro call
+    assert "Final sign-off is mine" in transcripts  # the call with the CFO
+    assert ["Call 1: L-001_intro_call", "Call 2: L-001_discovery_call"] == [h.value for h in deal.subheader if h.value.startswith("Call ")]
+    assert "all segments" in texts(deal)  # a global lesson from the call
+
+
+def test_io_tab_shows_where_the_document_is_and_offers_a_download(isolated_state):
+    full_story(isolated_state)
+    deal = page("deal")
+
+    assert not deal.exception
+    assert any(c.value.startswith("Signed by Ken Adeyemi") and "envelope ENV-IO-D-001" in c.value for c in deal.caption)
+    assert "Download IO-D-001" in [element.proto.label for element in deal.get("download_button")]
+
+
+def test_changing_terms_in_the_ui_redrafts_the_io(isolated_state):
+    at = page("demo")
+    for step in ("Next: New lead: BrightBite", "Approve", "Next: Reply R-000", "Approve", "Next: Reply R-001",
+                 "Next: Call transcript ready (Fireflies): L-001_intro", "Next: Call transcript ready (Fireflies): L-001_disc"):
+        button(at, step).click().run()
+
+    payment = next(box for box in at.text_input if box.label == "Payment terms")
+    payment.input("Net 45")  # inside a form: the value is submitted with the button click
+    button(at, "Save terms and redraft the IO").click().run()
+
+    assert not at.exception
+    system = build_system(make_llm("fake"), state_dir=isolated_state)
+    assert [r.id for r in system.approvals.pending()] == ["send_io:D-001:IO-D-001-v2"]
+    deal = page("deal")
+    assert any("payment terms Net 30 → Net 45" in m.value for m in deal.markdown)

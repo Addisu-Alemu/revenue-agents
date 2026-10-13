@@ -117,6 +117,8 @@ def test_the_full_conversation_is_one_linked_thread(system, replies):
     messages = system.crm.messages("D-001")
 
     assert [m.direction for m in messages] == ["outbound", "inbound", "outbound", "inbound"]
+    by_time = sorted(messages, key=lambda m: m.at)  # how the Deal page shows the thread
+    assert [m.direction for m in by_time] == ["outbound", "inbound", "outbound", "inbound"]
     assert {m.thread_id for m in messages} == {"T-D-001"}
     assert messages[1].in_reply_to == "msg:send_email:D-001:first_touch"  # her question answers our first email
     assert messages[3].in_reply_to == "msg:send_email:D-001:reply:R-000"  # her meeting request answers our answer
@@ -150,3 +152,76 @@ def test_a_concern_phrased_as_a_question_is_answered_too(tmp_path, replies):
     maya_asked(system, replies)
 
     assert [r.id for r in system.approvals.pending()] == ["send_email:D-001:reply:R-000"]
+
+
+# --- The reviewer edits an email before approving it -----------------------------------------------
+
+
+def maya_draft_waiting(system):
+    system.orchestrator.handle(story.lead_event(system.crm.get_lead("L-001")))
+    return system.approvals.get("send_email:D-001:first_touch")
+
+
+def approve(system, edits, request_id="send_email:D-001:first_touch"):
+    return system.orchestrator.handle(story.approval_event(request_id, True, YOU, edits=edits)).steps
+
+
+def test_an_edited_email_sends_the_reviewers_version_and_keeps_the_agents(system):
+    original = maya_draft_waiting(system).action.payload["body"]
+    edited = original.replace("Would you be open to", "Could we find time for")
+    lines = approve(system, {"body": edited})
+
+    [sent] = system.crm.messages("D-001")
+    request = system.approvals.get("send_email:D-001:first_touch")
+    assert sent.body == edited.strip()
+    assert sent.meta["edited_by"] == YOU
+    assert request.original_action.payload["body"] == original  # the agent's draft is kept
+    assert "Edited by you@cool.example before sending (body)" in lines
+    assert any(e.event == "edited_by_reviewer" for e in system.audit.events("D-001"))
+    assert system.crm.get_deal("D-001").stage is Stage.OUTREACH
+
+
+def test_unchanged_text_counts_as_a_plain_approval(system):
+    payload = maya_draft_waiting(system).action.payload
+    approve(system, {"subject": payload["subject"], "body": payload["body"] + "\n"})
+
+    assert system.approvals.get("send_email:D-001:first_touch").original_action is None
+    assert system.crm.messages("D-001")[0].meta["edited_by"] is None
+
+
+@pytest.mark.parametrize("edits, problem", [
+    ({"body": "   "}, "can't be empty"),
+    ({"to": "someone-else@example.com"}, "only the subject and body can be edited"),
+])
+def test_bad_edits_approve_nothing_and_can_be_retried(system, edits, problem):
+    maya_draft_waiting(system)
+    with pytest.raises(ValueError, match=problem):
+        approve(system, edits)
+
+    assert system.approvals.get("send_email:D-001:first_touch").status.value == "pending"
+    assert system.crm.messages("D-001") == []
+    approve(system, {"body": "Hi Maya,\n\nShort and sweet.\n\nBest,\nDaniel Reyes"})  # the same decision, fixed
+    assert system.crm.messages("D-001")[0].body.endswith("Daniel Reyes")
+
+
+def test_a_contract_cannot_be_edited_in_the_approval_queue(system, replies):
+    maya_draft_waiting(system)
+    approve(system, None)
+    system.orchestrator.handle(story.reply_event(replies["R-000"]))
+    approve(system, None, "send_email:D-001:reply:R-000")
+    system.orchestrator.handle(story.reply_event(replies["R-001"]))
+    system.orchestrator.handle(story.call_event(system.crm.get_lead("L-001"),
+                                                story.load_transcripts()["L-001"][-1]))
+
+    with pytest.raises(ValueError, match="only emails can be edited"):
+        approve(system, {"body": "cheaper please"}, "send_io:D-001:IO-D-001")
+
+
+def test_an_edited_email_still_waits_for_the_kill_switch(system):
+    maya_draft_waiting(system)
+    system.orchestrator.pause("Checking emails", by=YOU)
+    approve(system, {"body": "Hi Maya,\n\nEdited while paused.\n\nBest,\nDaniel Reyes"})
+    assert system.crm.messages("D-001") == []  # approved, edited, but nothing sent
+
+    system.orchestrator.resume(by=YOU)
+    assert "Edited while paused." in system.crm.messages("D-001")[0].body

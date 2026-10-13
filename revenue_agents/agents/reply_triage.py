@@ -33,9 +33,20 @@ Set asks_for_pricing to true if the sender asks about price, rates, costs or a r
 List any objections in a few words each. Suggest one concrete next step for the sales rep.
 If the sender asks us a question about the product that we should answer before going further, put it in
 `question` in one sentence; otherwise leave it empty. A meeting request on its own is not a question.
+If the sender asks to change the terms of an insertion order (IO) or contract we sent, list each requested change
+in `contract_changes`: the field (budget_usd, flight_start, flight_end, payment_terms, contract_term, scope or
+special_terms) and the new value exactly as asked (dates as YYYY-MM-DD, budget as whole US dollars). Leave it empty
+if no change is requested; never guess a value.
 If the reply teaches something reusable about selling to this kind of company, write it as a one-sentence
 lesson; otherwise leave lesson empty. Set lesson_is_general to true if the lesson would help sell to any
 kind of customer (e.g. objection handling), not just this kind of company."""
+
+
+class TermChange(Model):
+    """One contract term the sender asks to change, e.g. payment_terms -> "Net 45"."""
+
+    field: Literal["budget_usd", "flight_start", "flight_end", "payment_terms", "contract_term", "scope", "special_terms"]
+    value: str
 
 
 class ReplyClassification(Model):
@@ -45,6 +56,7 @@ class ReplyClassification(Model):
     objections: list[str] = Field(default_factory=list)
     suggested_next_step: str
     question: str | None = None  # a product question the sender wants answered before going further
+    contract_changes: list[TermChange] = Field(default_factory=list)  # changes asked for in an IO we sent
     lesson: str | None = None
     lesson_is_general: bool = False  # true: the lesson applies to every segment
 

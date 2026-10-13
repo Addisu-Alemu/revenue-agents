@@ -62,27 +62,38 @@ class CallBriefAgent(Agent):
     def __init__(self, segments: SegmentRegistry) -> None:
         self._segments = segments
 
-    def run(self, lead: Lead, deal: Deal, timeline: list[Activity], lessons: list[Lesson]) -> AgentResult[CallBrief]:
+    def run(self, lead: Lead, deal: Deal, timeline: list[Activity], lessons: list[Lesson],
+            after_call: str | None = None) -> AgentResult[CallBrief]:
+        """The brief for the next meeting. `after_call` names the call it follows, if any (a follow-up brief)."""
         pack = self._segments.get(lead.segment)
         relevant = [lesson for lesson in lessons if lesson.applies_in(lead.segment) and "call_brief" in lesson.applies_to]
         replies = [activity.data.get("classification", {}) for activity in timeline if activity.kind == "reply"]
+        calls = [activity.data for activity in timeline if activity.kind == "note" and "pains" in activity.data]
 
         brief = CallBrief(
             deal_id=deal.id,
             company=lead.company,
             headline=_headline(deal),
-            attendees=[f"{lead.contact.name}, {lead.contact.title} ({lead.contact.email})"],
+            attendees=_attendees(lead, deal),
             why_fit=_why_fit(deal),
-            what_they_said=[line for reply in replies for line in _said(reply)],
-            objections=sorted({objection for reply in replies for objection in reply.get("objections", [])}),
+            what_they_said=[line for reply in replies for line in _said(reply)]
+            + [f"On the call: {pain}" for call in calls for pain in call["pains"]]
+            + ([f"Agreed next step: {deal.fields.next_step}"] if deal.fields.next_step else []),
+            objections=sorted({objection for item in [*replies, *calls] for objection in item.get("objections", [])}),
             lessons=[f"{lesson.text} (from {lesson.source} {lesson.source_id})" for lesson in relevant],
             products=pack.products,
             questions=[QUESTIONS[name] for name in PROPOSAL_FIELDS if not getattr(deal.fields, name)],
             watch_outs=_watch_outs(deal.flags),
         )
+        if after_call:
+            missing = [name.replace("_", " ") for name in PROPOSAL_FIELDS if not getattr(deal.fields, name)]
+            summary = (f"Call brief updated for the next call with {lead.company}: still missing "
+                       f"{', '.join(missing) or 'nothing'}")
+        else:
+            summary = f"Call brief ready for the rep: {lead.company}, meeting with {lead.contact.name}"
         action = self.propose(
-            ActionType.PREPARE_CALL_BRIEF, deal, key="meeting",
-            summary=f"Call brief ready for the rep: {lead.company}, meeting with {lead.contact.name}",
+            ActionType.PREPARE_CALL_BRIEF, deal, key=f"after:{after_call}" if after_call else "meeting",
+            summary=summary,
             payload={"brief": brief.model_dump(mode="json"), "markdown": brief.render(),
                      "lessons_used": [lesson.id for lesson in relevant]},
         )
@@ -95,6 +106,14 @@ def _headline(deal: Deal) -> str:
     s = deal.score
     return (f"Tier {s.tier.value} · {s.total:g} (fit {s.fit.value:g}, intent {s.intent.value:g}, "
             f"engagement {s.engagement.value:g})")
+
+
+def _attendees(lead: Lead, deal: Deal) -> list[str]:
+    people = [f"{lead.contact.name}, {lead.contact.title} ({lead.contact.email})"]
+    signer = deal.fields.decision_maker
+    if signer and lead.contact.name.split()[0] not in signer:
+        people.append(f"{signer}: signs the contract")
+    return people
 
 
 def _why_fit(deal: Deal) -> list[str]:

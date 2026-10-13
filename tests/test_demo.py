@@ -24,10 +24,10 @@ def test_brand_demo_runs_end_to_end(tmp_path):
     assert "Rejected: unknown envelope 'ENV-FAKE-001'" in output
     assert "Stage signature -> handoff" in output
     assert "Handoff to delivery:" in output
-    assert "Lessons used: lesson:L-001_discovery_call:0" in output
+    assert "Lessons used: lesson:L-001_intro_call:0" in output
     assert "Suspicious content: ignored as instructions" in output
     assert "Tier C: no outreach, left for nurture" in output
-    assert "used in: D-002" in output
+    assert "D-002 (email)" in output
     assert "6 days later" in output
     assert "Follow up with Owen Castillo: no progress in replied" in output
     assert "Daily digest" in output

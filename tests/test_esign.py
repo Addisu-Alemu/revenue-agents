@@ -119,3 +119,10 @@ def test_duplicate_signature_webhook_closes_once(system, transcript):
 
     assert system.orchestrator.handle(signed()).status == "duplicate"
     assert [a.kind for a in system.crm.timeline("D-001")].count("handoff") == 1
+
+
+def test_the_envelope_keeps_the_document_that_was_sent(tmp_path):
+    from revenue_agents.esign import MockESign
+    esign = MockESign(tmp_path / "esign.json")
+    esign.send("D-001", "IO-D-001", "# Insertion Order IO-D-001\\nTotal budget: 250,000 USD", "ken@brightbite.example")
+    assert esign.get("ENV-IO-D-001").document.startswith("# Insertion Order IO-D-001")

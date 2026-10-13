@@ -19,6 +19,7 @@ from revenue_agents.storage import STATE_DIR, locked, read_json, utc_now, write_
 class EnvelopeStatus(str, Enum):
     SENT = "sent"
     SIGNED = "signed"
+    VOIDED = "voided"  # replaced by a newer IO: it can no longer be signed
 
 
 class Envelope(Model):
@@ -30,11 +31,14 @@ class Envelope(Model):
     sent_at: dt.datetime
     signed_by: str | None = None
     signed_at: dt.datetime | None = None
+    document: str = ""  # exactly what was sent for signature
+    void_reason: str | None = None
 
 
 class ESignProvider(Protocol):
     def send(self, deal_id: str, io_number: str, document: str, signer_email: str) -> Envelope: ...
     def get(self, envelope_id: str) -> Envelope: ...
+    def void(self, envelope_id: str, reason: str) -> Envelope: ...
 
 
 class MockESign:
@@ -50,7 +54,7 @@ class MockESign:
             envelopes = read_json(self._path, {})
             if envelope_id not in envelopes:
                 envelope = Envelope(id=envelope_id, deal_id=deal_id, io_number=io_number, signer_email=signer_email,
-                                    sent_at=utc_now())
+                                    sent_at=utc_now(), document=document)
                 envelopes[envelope_id] = envelope.model_dump(mode="json")
                 write_json(self._path, envelopes)
             return Envelope.model_validate(envelopes[envelope_id])
@@ -61,12 +65,29 @@ class MockESign:
             raise KeyError(f"no envelope '{envelope_id}'")
         return Envelope.model_validate(envelope)
 
+    def void(self, envelope_id: str, reason: str) -> Envelope:
+        """Withdraw an envelope (a newer IO replaces it). A signed envelope can't be voided."""
+        with locked(self._path):
+            envelopes = read_json(self._path, {})
+            if envelope_id not in envelopes:
+                raise KeyError(f"no envelope '{envelope_id}'")
+            envelope = Envelope.model_validate(envelopes[envelope_id])
+            if envelope.status is EnvelopeStatus.SIGNED:
+                raise ValueError(f"envelope '{envelope_id}' is already signed")
+            envelope = envelope.model_copy(update={"status": EnvelopeStatus.VOIDED, "void_reason": reason})
+            envelopes[envelope_id] = envelope.model_dump(mode="json")
+            write_json(self._path, envelopes)
+            return envelope
+
     def sign(self, envelope_id: str, signed_by: str) -> Envelope:
         with locked(self._path):
             envelopes = read_json(self._path, {})
             if envelope_id not in envelopes:
                 raise KeyError(f"no envelope '{envelope_id}'")
-            envelope = Envelope.model_validate(envelopes[envelope_id]).model_copy(
+            envelope = Envelope.model_validate(envelopes[envelope_id])
+            if envelope.status is EnvelopeStatus.VOIDED:
+                raise ValueError(f"envelope '{envelope_id}' was voided and can't be signed")
+            envelope = envelope.model_copy(
                 update={"status": EnvelopeStatus.SIGNED, "signed_by": signed_by, "signed_at": utc_now()})
             envelopes[envelope_id] = envelope.model_dump(mode="json")
             write_json(self._path, envelopes)

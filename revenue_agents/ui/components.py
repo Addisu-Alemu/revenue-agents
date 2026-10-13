@@ -26,7 +26,8 @@ ACTIVITY_ICONS = {
     "email_sent": ":material/mail:", "reply": ":material/reply:", "flag": ":material/flag:",
     "note": ":material/sticky_note_2:", "stage_change": ":material/trending_flat:", "document": ":material/description:",
     "io_sent": ":material/send:", "signed": ":material/draw:", "handoff": ":material/handshake:",
-    "reminder": ":material/alarm:", "call_brief": ":material/assignment:",
+    "reminder": ":material/alarm:", "call_brief": ":material/assignment:", "call": ":material/call:",
+    "io_voided": ":material/block:",
 }
 
 CSS = """
@@ -144,10 +145,20 @@ def approval_card(system: System, request: ApprovalRequest, key: str) -> None:
             tier_badge(deal)
         st.warning(f"**Why a human must decide:** {request.reason}", icon=":material/policy:")
 
+        edits: dict[str, str] = {}
         if action.type is ActionType.SEND_EMAIL:
-            email_card(action.payload)
+            edits = _editable_email(action.payload, key)
         elif action.type is ActionType.SEND_IO:
+            requested = action.payload.get("requested_changes")
+            if requested:
+                asked = "; ".join(f"{name.replace('_', ' ')} {getattr(deal.fields, name)} → {value}"
+                                  for name, value in requested.items())
+                st.info(f"**The customer asked for this change** (in {action.payload['requested_in']}): {asked}. "
+                        f"Approve to send this version: the deal takes the new terms and the IO sent earlier is "
+                        f"voided. Reject to keep the current IO.", icon=":material/mark_email_read:")
             io_preview(action.payload["document"])
+            with st.expander("Change the terms (redrafts the IO)", icon=":material/edit_document:"):
+                terms_form(system, deal, f"{key}-terms")
 
         is_email = action.type is ActionType.SEND_EMAIL
         note = st.text_input(
@@ -161,14 +172,34 @@ def approval_card(system: System, request: ApprovalRequest, key: str) -> None:
         reject_label = "Reject & redraft" if is_email and note.strip() else "Reject"
         if buttons[1].button(reject_label, key=f"{key}-reject", width="stretch"):
             _decide(system, request, False, note, save_lesson)
-        if buttons[2].button("Approve", key=f"{key}-approve", type="primary", icon=":material/check:",
-                             width="stretch"):
-            _decide(system, request, True, note)
+        if buttons[2].button("Approve with edits" if edits else "Approve", key=f"{key}-approve", type="primary",
+                             icon=":material/check:", width="stretch"):
+            if any(not value.strip() for value in edits.values()):
+                st.error("The subject and the email can't be empty.", icon=":material/error:")
+            else:
+                _decide(system, request, True, note, edits=edits)
 
 
-def _decide(system: System, request: ApprovalRequest, approved: bool, note: str, save_lesson: bool = False) -> None:
+def _editable_email(email: dict, key: str) -> dict[str, str]:
+    """The draft as editable fields. Returns only what the reviewer changed."""
+    st.markdown(f"**To:** {email['to']}")
+    subject = st.text_input("Subject", value=email["subject"], key=f"{key}-subject")
+    body = st.text_area("Email", value=email["body"].strip(), key=f"{key}-body", height=280,
+                        help="Edit the wording if you like. Approving sends your version; the agent's draft is kept.")
+    if email.get("lessons_used"):
+        st.caption(f":material/psychology: Shaped by lessons: {', '.join(email['lessons_used'])}")
+    edits = {field: value for field, value in (("subject", subject), ("body", body))
+             if value.strip() != email[field].strip()}
+    if edits:
+        st.info("You edited this email. Approving sends your version, and the agent's original draft is kept for "
+                "the record.", icon=":material/edit:")
+    return edits
+
+
+def _decide(system: System, request: ApprovalRequest, approved: bool, note: str, save_lesson: bool = False,
+            edits: dict[str, str] | None = None) -> None:
     reviewer = st.session_state.reviewer
-    event = story.approval_event(request.id, approved, reviewer, note.strip() or None, save_lesson)
+    event = story.approval_event(request.id, approved, reviewer, note.strip() or None, save_lesson, edits)
     start = system.tracer.count()
     with st.status("Approving…" if approved else "Rejecting…", expanded=True) as status:
         try:
@@ -383,9 +414,17 @@ def conversation(system: System, deal: Deal) -> None:
                 request = next((r for r in system.approvals.all() if r.id == message.meta.get("action_id")), None)
                 note = (f"approved by {request.decided_by}" if request and request.status is ApprovalStatus.APPROVED
                         else "sent automatically (policy: low risk)")
+                if message.meta.get("edited_by"):
+                    note += f" · edited by {message.meta['edited_by']} before sending"
                 lessons = message.meta.get("lessons_used") or []
                 st.caption(f":material/verified_user: {note}" + (f" · shaped by lessons: {', '.join(lessons)}"
                                                                   if lessons else ""))
+                if request and request.original_action:
+                    with st.expander("Show the agent's original draft"):
+                        original = request.original_action.payload
+                        st.markdown(f"**Subject:** {_escape(original['subject'])}")
+                        st.markdown(f"<div class='ra-email'>{_escape(original['body'].strip().replace('<', '&lt;'))}"
+                                    f"</div>", unsafe_allow_html=True)
             else:
                 meta = message.meta
                 linked = f"answers {message.in_reply_to}" if message.in_reply_to else "not linked to any email we sent"
@@ -404,3 +443,39 @@ def conversation(system: System, deal: Deal) -> None:
 def _escape(text: str) -> str:
     """Streamlit treats $...$ as a maths formula; show dollar signs as text."""
     return text.replace("$", "\\$")
+
+
+
+# --- Contract terms ---------------------------------------------------------------------------
+
+
+def terms_form(system: System, deal: Deal, key: str) -> None:
+    """The deal's commercial terms. Saving a change updates the deal and the deal desk redrafts the IO from it."""
+    fields = deal.fields
+    with st.form(key, border=False):
+        left, right = st.columns(2)
+        budget = left.number_input("Budget (USD)", min_value=0, step=5000, value=fields.budget_usd or 0)
+        payment = right.text_input("Payment terms", value=fields.payment_terms or "")
+        start = left.date_input("Flight start", value=fields.flight_start)
+        end = right.date_input("Flight end", value=fields.flight_end)
+        term = left.text_input("Contract term", value=fields.contract_term or "")
+        scope = right.text_input("Scope", value=fields.scope or "")
+        special = st.text_area("Special terms", value=fields.special_terms or "", height=80)
+        submitted = st.form_submit_button("Save terms and redraft the IO", icon=":material/autorenew:")
+    if not submitted:
+        return
+    new = {"budget_usd": int(budget), "payment_terms": payment.strip(), "flight_start": start, "flight_end": end,
+           "contract_term": term.strip(), "scope": scope.strip(), "special_terms": special.strip()}
+    changes = {name: (value.isoformat() if hasattr(value, "isoformat") else value) for name, value in new.items()
+               if value and value != getattr(fields, name)}
+    if not changes:
+        st.info("Nothing changed.", icon=":material/info:")
+        return
+    start_count = system.tracer.count()
+    try:
+        lines = system.orchestrator.handle(story.terms_event(deal.id, changes, st.session_state.reviewer)).steps
+    except Exception as error:  # e.g. an invalid value: show it, nothing was changed
+        st.error(f"Terms not saved: {error}", icon=":material/error:")
+        return
+    context.log(f"Terms changed: {', '.join(changes)}", lines, (start_count, system.tracer.count()))
+    st.rerun()
