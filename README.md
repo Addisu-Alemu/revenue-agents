@@ -26,7 +26,7 @@ docker compose exec app python scripts/kill_switch.py on --reason "Investigating
 
 ## Setup (without Docker)
 
-Requires **Python 3.10+** (developed on 3.11). Works on Windows, macOS and Linux. An **Anthropic API key** is only needed for the real model (`--llm claude`); the default fake mode needs none.
+Requires **Python 3.10+** (developed on 3.11). Works on Windows, macOS and Linux. An **Anthropic API key** is only needed for the real model (`--llm claude`); the default scripted mode needs none.
 
 ```bash
 git clone https://github.com/Addisu-Alemu/revenue-agents.git
@@ -70,7 +70,7 @@ python run_demo.py --segment agency # the agency segment (added with config only
 
 The demo runs the brand segment's mock data through the real system: a new lead is enriched, scored and tiered; the Tier A first email **pauses for your approval**; Maya replies with a question first (can corporate control what franchisees change?), the outreach agent drafts an answer that **pauses for approval** too, and her next reply asks for a meeting, so the deal moves to Meeting and a **call brief** is prepared for the rep (a duplicate webhook is ignored); an intro call leaves budget and dates open, so the rep gets an **updated call brief**, and the call with the CFO fills them in; the calls produce lessons, some for the brand segment and some **global** for every segment; the IO is drafted and **pauses for approval** and goes out for e-signature; Maya then emails that Ken wants Net 45, so the agents draft **IO v2** for your approval (approving sends it and voids the first IO, so only the new one can be signed); a forged "signed" webhook is rejected and the real one closes the deal (handoff); the next brand lead's email **applies a lesson** from the call; Owen's prompt-injection reply is flagged; and six days later the SLA check flags a stalled deal and the daily digest prints. It ends with the pipeline, the knowledge loop and the audit log size. The whole conversation with Maya is stored as one email thread.
 
-Without `--llm claude`, model answers are scripted for the mock data (and the demo says so); everything else is the real code path. `--llm claude` never falls back to fake: if the key is missing or has no credit, it stops with an error. Demo state is written to `state/demo/` and reset on each run (`--keep-state` to keep it).
+Without `--llm claude`, model answers are scripted for the mock data (and the demo says so); everything else is the real code path. `--llm claude` never falls back to scripted answers: if the key is missing or has no credit, it stops with an error. Demo state is written to `state/demo/` and reset on each run (`--keep-state` to keep it).
 
 ## UI
 

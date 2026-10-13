@@ -1,4 +1,4 @@
-"""Scripted model answers for the mock data, used by `--llm fake`.
+"""Scripted model answers for the mock data, used by `--llm scripted`.
 
 They are written the way a good model would answer our mock leads, replies
 and transcript, so the whole flow can be demonstrated without API credit.
@@ -112,7 +112,7 @@ OUTREACH_OPENINGS: dict[str, tuple[str, int]] = {
 }
 DEFAULT_OPENING = ("I came across your team and thought this might be relevant.", 0)
 
-# Fake mode can't read a reviewer's note, so a redraft uses a prepared alternative opening.
+# Scripted mode can't read a reviewer's note, so a redraft uses a prepared alternative opening.
 # Suggested notes for the live demo are in the comments.
 OUTREACH_REDRAFTS: dict[str, tuple[str, int]] = {
     # e.g. "Mention their Q1 menu launch"

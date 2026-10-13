@@ -1,4 +1,4 @@
-"""The live demo runs end to end in fake mode, pauses for approvals, and fails clearly."""
+"""The live demo runs end to end in scripted mode, pauses for approvals, and fails clearly."""
 
 import pytest
 
@@ -17,7 +17,7 @@ def test_brand_demo_runs_end_to_end(tmp_path):
     code, output = demo(tmp_path, auto_approve=True)
 
     assert code == 0
-    assert "NOTE: fake mode" in output
+    assert "NOTE: scripted mode" in output
     assert "APPROVAL NEEDED: First email to Maya Thompson" in output
     assert "Already handled: ignored" in output  # duplicate webhook
     assert "Stage proposal -> signature" in output
@@ -63,13 +63,13 @@ def test_claude_mode_without_key_fails_instead_of_faking(tmp_path, monkeypatch):
     code, output = demo(tmp_path, llm_mode="claude", auto_approve=True)
     assert code == 1
     assert "FAILED: ANTHROPIC_API_KEY is not set" in output
-    assert "NOTE: fake mode" not in output
+    assert "NOTE: scripted mode" not in output
 
 
 def test_make_llm_modes():
-    assert isinstance(make_llm("fake"), FakeLLM)
+    assert isinstance(make_llm("scripted"), FakeLLM)
     assert isinstance(make_llm("claude"), ClaudeLLM)
-    with pytest.raises(ValueError, match="use 'fake' or 'claude'"):
+    with pytest.raises(ValueError, match="use 'scripted' or 'claude'"):
         make_llm("gpt")
 
 

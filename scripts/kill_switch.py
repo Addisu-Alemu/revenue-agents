@@ -26,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reason", default="no reason given")
     parser.add_argument("--by", default=getpass.getuser(), help="who is flipping the switch (audited)")
     parser.add_argument("--state-dir", default=str(DEMO_STATE))
-    parser.add_argument("--llm", choices=["fake", "claude"], default="fake", help="model used to replay held events")
+    parser.add_argument("--llm", choices=["scripted", "claude"], default="scripted", help="model used to replay held events")
     args = parser.parse_args(argv)
 
     load_dotenv()

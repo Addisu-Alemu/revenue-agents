@@ -37,9 +37,9 @@ with st.sidebar:
     system = context.get_system()
     st.segmented_control("Segment", system.segments.names(), key="segment", required=True,
                          help="Which segment's story to run. Each segment is one YAML config pack.")
-    st.segmented_control("Model", ["fake", "claude"], key="llm_mode", required=True,
-                         help="fake: scripted answers for the mock data. claude: the real model (needs API credit).")
-    if st.session_state.llm_mode == "fake":
+    st.segmented_control("Model", ["scripted", "claude"], key="llm_mode", required=True,
+                         help="scripted: pre-written answers for the mock data. claude: the real model (needs API credit).")
+    if st.session_state.llm_mode == "scripted":
         st.badge("Scripted model answers", icon=":material/science:", color="orange")
     else:
         st.badge("Live Claude", icon=":material/bolt:", color="green")

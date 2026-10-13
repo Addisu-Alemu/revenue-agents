@@ -38,7 +38,7 @@ def test_model_calls_record_prompt_answer_and_model(system):
     story.run(system, story.plan(system.crm.leads(), "brand")[0])
     [call] = [span for span in system.tracer.spans() if span.kind == "llm"]
 
-    assert call.data["model"] == "scripted answers (fake mode)"
+    assert call.data["model"] == "scripted answers"
     assert "Company: BrightBite Burgers" in call.data["prompt"]
     assert "Don't start with a greeting" in call.data["system"]
     assert call.data["answer"]["value_prop_index"] == 0

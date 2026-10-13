@@ -21,7 +21,7 @@ from revenue_agents.guardrails.claims import ActionClaims
 from revenue_agents.guardrails.policy import ActionType
 from revenue_agents.system import System, build_system, make_llm, reset_state
 
-DEFAULTS = {"segment": "brand", "llm_mode": "fake", "reviewer": "you@cool.example"}
+DEFAULTS = {"segment": "brand", "llm_mode": "scripted", "reviewer": "you@cool.example"}
 
 
 @dataclass
