@@ -33,7 +33,7 @@ from pydantic import Field
 
 from revenue_agents.agents.call_brief import CallBriefAgent
 from revenue_agents.agents.call_intel import CallIntelAgent
-from revenue_agents.agents.deal_desk import DealDeskAgent
+from revenue_agents.agents.deal_desk import DealDeskAgent, io_terms
 from revenue_agents.agents.outreach import DraftRejectedError, OutreachAgent, Review
 from revenue_agents.agents.reply_triage import ReplyTriageAgent
 from revenue_agents.agents.research import ResearchAgent
@@ -49,7 +49,7 @@ from revenue_agents.guardrails.held_events import HeldEvents
 from revenue_agents.guardrails.kill_switch import KillSwitch
 from revenue_agents.guardrails.policy import Action, ActionType
 from revenue_agents.lessons import LessonStore
-from revenue_agents.models import Deal, Lesson, Message, Model, Reply, Stage
+from revenue_agents.models import Deal, DealFields, Lesson, Message, Model, Reply, Stage
 from revenue_agents.segments import SegmentRegistry
 from revenue_agents.stages import ORDER, is_forward, missing_for
 from revenue_agents.storage import utc_now
@@ -62,6 +62,9 @@ ACCEPTED_WHILE_PAUSED = frozenset({EventType.APPROVAL_DECIDED, EventType.DIGEST_
 
 # A question in these replies gets an answer drafted (a concern phrased as a question counts as an objection).
 ANSWERABLE_INTENTS = frozenset({"interested", "objection"})
+
+# Once an IO exists, a reply about it is for the rep: contract terms change only through a person.
+CONTRACT_STAGES = frozenset({Stage.PROPOSAL, Stage.SIGNATURE})
 
 # Replies with these flags are answered by a human, never drafted by an agent.
 HUMAN_ONLY_FLAGS = frozenset({"pricing_requested", "possible_prompt_injection"})
@@ -119,6 +122,7 @@ class Orchestrator:
             EventType.REPLY_RECEIVED: self._on_reply,
             EventType.CALL_COMPLETED: self._on_call,
             EventType.SIGNATURE_COMPLETED: self._on_signature,
+            EventType.TERMS_CHANGED: self._on_terms_changed,
             EventType.SLA_CHECK: self._on_sla_check,
             EventType.DIGEST_DAILY: self._on_digest,
         }
@@ -222,16 +226,25 @@ class Orchestrator:
     def _on_approval(self, event: Event) -> list[str]:
         request_id, reviewer, approved = event.payload["request_id"], event.payload["reviewer"], event.payload["approved"]
         request = self._approvals.get(request_id)
+        steps = []
         if request.status is ApprovalStatus.PENDING:
-            decide = self._approvals.approve if approved else self._approvals.reject
-            request = decide(request_id, reviewer, event.payload.get("note"))
+            edits = _real_edits(request, event.payload.get("edits")) if approved else {}
+            if edits:
+                request = self._approvals.approve(request_id, reviewer, event.payload.get("note"), edits)
+                detail = f"{reviewer} edited the {' and '.join(sorted(edits))} before approving"
+                self._audit.record(self.name, "edited_by_reviewer", deal_id=request.action.deal_id,
+                                   action_id=request.id, detail=detail)
+                steps.append(f"Edited by {reviewer} before sending ({' and '.join(sorted(edits))})")
+            else:
+                decide = self._approvals.approve if approved else self._approvals.reject
+                request = decide(request_id, reviewer, event.payload.get("note"))
         elif (request.status is ApprovalStatus.APPROVED) != approved:
             return [f"Already {request.status.value} by {request.decided_by}: decision not changed"]
 
         if not approved:
             return self._after_rejection(request, event.payload.get("save_lesson", False))
         # Same decision again (e.g. a retry after a failure): carry on and run it. Actions run once.
-        return self._execute_approved(request)
+        return steps + self._execute_approved(request)
 
     def _after_rejection(self, request: ApprovalRequest, save_lesson: bool) -> list[str]:
         note = (request.note or "").strip()
@@ -240,6 +253,8 @@ class Orchestrator:
             steps += self._lesson_from_review(request, note)
         if note and request.action.type is ActionType.SEND_EMAIL:
             steps += self._redraft(request, note)
+        if request.action.payload.get("requested_changes"):
+            steps.append("The customer's requested change was declined: the IO already sent stays valid")
         return steps
 
     def _lesson_from_review(self, request: ApprovalRequest, note: str) -> list[str]:
@@ -275,7 +290,10 @@ class Orchestrator:
         line = f"Approved by {request.decided_by}: {request.action.summary} -> {result.outcome.value}"
         if result.outcome is Outcome.BLOCKED:
             line += f" ({result.reason}; it will run when the kill switch is released, or via Run now)"
-        return [line] + self._after(request.action, result)
+        steps = [line] + self._after(request.action, result)
+        if result.outcome is Outcome.EXECUTED and request.action.type is ActionType.SEND_IO:
+            steps += self._after_io_sent(request.action)
+        return steps
 
     def _on_reply(self, event: Event) -> list[str]:
         reply = Reply.model_validate(event.payload["reply"])
@@ -315,6 +333,14 @@ class Orchestrator:
         if "unsubscribe" in triage.flags:
             return steps + self._advance(deal.id, Stage.CLOSED_LOST, reason="contact unsubscribed")
         question = triage.classification.question
+        if deal.stage in CONTRACT_STAGES and triage.classification.intent in ("objection", "interested", "other"):
+            changes = {change.field: change.value for change in triage.classification.contract_changes}
+            if deal.stage is Stage.SIGNATURE and changes and "possible_prompt_injection" not in triage.flags:
+                # The customer asked for specific changes to the IO they received: draft them for the rep to approve.
+                return steps + self._propose_io_change(lead, deal.id, changes, reply)
+            # Otherwise a person reads it: flag it; the rep updates the terms and the IO is redrafted.
+            return steps + self._flag(self._crm.get_deal(deal.id), "io_change_requested",
+                                      f"{lead.contact.name} wrote about the IO: {triage.classification.summary}")
         if question and triage.classification.intent in ANSWERABLE_INTENTS and not HUMAN_ONLY_FLAGS & set(triage.flags):
             steps += self._answer_question(lead, deal.id, reply, question)
         if "meeting_requested" in flags:
@@ -349,17 +375,22 @@ class Orchestrator:
         exact = next((message for message in sent if message.id == reply.in_reply_to), None)
         return exact or (sent[-1] if sent else None)
 
-    def _prepare_call_brief(self, lead, deal_id: str) -> list[str]:
-        """Before the meeting: a prep sheet with what we know, lessons from similar deals, and what to ask."""
+    def _prepare_call_brief(self, lead, deal_id: str, after_call: str | None = None) -> list[str]:
+        """Before a meeting: a prep sheet with what we know, lessons from similar deals, and what to ask.
+        After a call that left things open, the same sheet for the next call."""
         deal = self._crm.get_deal(deal_id)
         lessons = self._lessons.for_segment(lead.segment, purpose="call_brief")
-        result = self._agents.call_brief.run(lead, deal, self._crm.timeline(deal_id), lessons)
+        result = self._agents.call_brief.run(lead, deal, self._crm.timeline(deal_id), lessons, after_call=after_call)
         return self._submit(result.actions)
 
     def _on_call(self, event: Event) -> list[str]:
         lead = self._crm.get_lead(event.payload["lead_id"])
         deal = self._crm.deal_for_lead(lead.id)
-        result = self._agents.call_intel.run(event.payload["transcript_id"], event.payload["transcript"], lead, deal)
+        transcript_id, transcript = event.payload["transcript_id"], event.payload["transcript"]
+        # Keep the call on the deal, as HubSpot keeps a call recording: the rep can read what was actually said.
+        self._crm.log(deal.id, "call", f"Call recorded: {transcript_id}",
+                      {"transcript_id": transcript_id, "transcript": transcript})
+        result = self._agents.call_intel.run(transcript_id, transcript, lead, deal)
         intel = result.output
         steps = [f"Call {intel.transcript_id}: budget {intel.fields.budget_usd}, signer {intel.fields.decision_maker}"]
         steps += [f"Lesson learned: {lesson.text}" for lesson in intel.lessons]
@@ -368,14 +399,115 @@ class Orchestrator:
         steps += self._advance(deal.id, Stage.QUALIFIED)
         deal = self._crm.get_deal(deal.id)
         if deal.stage is Stage.CLOSED_LOST or ORDER.index(deal.stage) < ORDER.index(Stage.QUALIFIED):
-            return steps + ["Not qualified yet: no IO drafted"]
-        if deal.stage is not Stage.QUALIFIED:
-            return steps + [f"Deal already at {deal.stage.value}: IO not redrafted"]
+            steps.append("Not qualified yet: no IO drafted")
+            if deal.stage is Stage.MEETING:  # another call is needed: prepare the rep for it
+                steps += self._prepare_call_brief(lead, deal.id, after_call=transcript_id)
+            return steps
+        if deal.stage is Stage.HANDOFF:
+            return steps + ["Deal already signed: IO not redrafted"]
+        return steps + self._draft_io(lead, deal.id, reason=f"call {transcript_id}")
 
-        io = self._agents.deal_desk.run(lead, deal)
+    def _on_terms_changed(self, event: Event) -> list[str]:
+        """A rep changed the commercial terms. Update the deal (audited), then redraft the IO from the new facts."""
+        deal = self._crm.get_deal(event.payload["deal_id"])
+        lead = self._crm.get_lead(deal.lead_id)
+        changes, by = event.payload["changes"], event.payload["by"]
+        unknown = set(changes) - EDITABLE_TERMS
+        if unknown:
+            raise ValueError(f"these terms can't be changed here: {', '.join(sorted(unknown))}")
+        DealFields.model_validate({**deal.fields.model_dump(), **changes})  # invalid values fail before anything changes
+
+        described = ", ".join(f"{name.replace('_', ' ')} → {value}" for name, value in changes.items())
+        update = Action(id=f"update_deal:{deal.id}:{event.id}", type=ActionType.UPDATE_DEAL, agent=self.name,
+                        deal_id=deal.id, summary=f"Terms changed by {by}: {described}",
+                        payload={"fields": changes, "changed_by": by, "clear_flags": ["io_change_requested"]})
+        steps = self._submit([update])
+        return steps + self._draft_io(lead, deal.id, reason=f"terms changed by {by}")
+
+    def _draft_io(self, lead, deal_id: str, reason: str) -> list[str]:
+        """Draft the deal's IO, or a new version if the terms differ from the latest one.
+        A newer version replaces the old: a pending one is closed, a sent one is voided so it can't be signed."""
+        deal = self._crm.get_deal(deal_id)
+        drafts = [a for a in self._crm.timeline(deal_id) if a.kind == "document"]
+        if drafts and drafts[-1].data.get("terms") == io_terms(deal.fields):
+            return [f"IO terms unchanged: {drafts[-1].data['io_number']} still stands"]
+
+        version = len(drafts) + 1
+        io = self._agents.deal_desk.run(lead, deal, version=version)
         if io.output.errors:
-            return steps + self._flag(deal, "io_blocked", "; ".join(io.output.errors))
+            return self._flag(deal, "io_blocked", "; ".join(io.output.errors))
+        steps = [f"Redrafting the IO as {io.output.io_number} ({reason})"] if drafts else []
+        steps += self._replace_old_io(deal, io.output.io_number)
         return steps + self._submit(io.actions)
+
+    def _propose_io_change(self, lead, deal_id: str, changes: dict, reply: Reply) -> list[str]:
+        """The customer asked to change the IO they received. Draft the new version for the rep to approve.
+        Nothing is final yet: the deal keeps its terms and the sent IO stays valid until the rep approves."""
+        deal = self._crm.get_deal(deal_id)
+        unknown = set(changes) - EDITABLE_TERMS
+        try:
+            proposed = DealFields.model_validate({**deal.fields.model_dump(), **changes})
+        except ValueError as error:
+            return self._flag(deal, "io_change_requested", f"{reply.id} asks for changes we couldn't read: {error}")
+        if unknown:
+            return self._flag(deal, "io_change_requested", f"{reply.id} asks to change {', '.join(sorted(unknown))}")
+        if io_terms(proposed) == io_terms(deal.fields):
+            return [f"{reply.id} asks for terms the IO already has: nothing to redraft"]
+
+        drafts = [a for a in self._crm.timeline(deal_id) if a.kind == "document"]
+        io = self._agents.deal_desk.run(lead, deal.model_copy(update={"fields": proposed}), version=len(drafts) + 1)
+        if io.output.errors:
+            return self._flag(deal, "io_change_requested", f"{reply.id}: the requested IO isn't valid: "
+                                                          f"{'; '.join(io.output.errors)}")
+        request = {"requested_changes": {name: proposed.model_dump(mode="json")[name] for name in changes},
+                   "requested_in": reply.id}
+        actions = [action.model_copy(update={"payload": {**action.payload, **request}}) for action in io.actions]
+        described = ", ".join(f"{name.replace('_', ' ')} → {value}" for name, value in changes.items())
+        steps = [f"{lead.contact.name} asked to change the IO ({described}): drafting {io.output.io_number} "
+                 f"for your approval. The current IO stays valid until you approve."]
+        for pending in self._approvals.pending():  # an older draft that was never sent is simply replaced
+            if pending.action.deal_id == deal_id and pending.action.type is ActionType.SEND_IO:
+                self._approvals.reject(pending.id, self.name, note=f"Replaced by {io.output.io_number}")
+        return steps + self._submit(actions)
+
+    def _after_io_sent(self, action: Action) -> list[str]:
+        """A newer IO went out: the customer's requested terms become the deal's, and older IOs are voided."""
+        deal = self._crm.get_deal(action.deal_id)
+        steps = []
+        requested = action.payload.get("requested_changes")
+        if requested:
+            update = Action(id=f"update_deal:{deal.id}:{action.payload['io_number']}", type=ActionType.UPDATE_DEAL,
+                            agent=self.name, deal_id=deal.id,
+                            summary=f"Terms agreed in {action.payload['io_number']} (asked in "
+                                    f"{action.payload['requested_in']})",
+                            payload={"fields": requested, "clear_flags": ["io_change_requested"]})
+            steps += self._submit([update])
+        for sent in [a for a in self._crm.timeline(deal.id) if a.kind == "io_sent"]:
+            envelope = self._esign.get(sent.data["envelope_id"])
+            if envelope.status is EnvelopeStatus.SENT and envelope.io_number != action.payload["io_number"]:
+                void = Action(id=f"void_io:{deal.id}:{envelope.id}", type=ActionType.VOID_IO, agent=self.name,
+                              deal_id=deal.id, summary=f"Void {envelope.io_number}: replaced by "
+                                                       f"{action.payload['io_number']}",
+                              payload={"envelope_id": envelope.id, "reason": f"replaced by {action.payload['io_number']}"})
+                steps += self._submit([void])
+        return steps
+
+    def _replace_old_io(self, deal: Deal, new_io: str) -> list[str]:
+        steps = []
+        for request in self._approvals.pending():
+            if request.action.deal_id == deal.id and request.action.type is ActionType.SEND_IO:
+                self._approvals.reject(request.id, self.name, note=f"Replaced by {new_io}")
+                self._audit.record(self.name, "io_replaced", deal_id=deal.id, action_id=request.id,
+                                   detail=f"replaced by {new_io} before it was sent")
+                steps.append(f"{request.action.payload['io_number']} was waiting for approval: replaced by {new_io}")
+        for sent in [a for a in self._crm.timeline(deal.id) if a.kind == "io_sent"]:
+            envelope = self._esign.get(sent.data["envelope_id"])
+            if envelope.status is EnvelopeStatus.SENT:
+                void = Action(id=f"void_io:{deal.id}:{envelope.id}", type=ActionType.VOID_IO, agent=self.name,
+                              deal_id=deal.id, summary=f"Void {envelope.io_number}: replaced by {new_io}",
+                              payload={"envelope_id": envelope.id, "reason": f"replaced by {new_io}"})
+                steps += self._submit([void])
+        return steps
 
     def _on_signature(self, event: Event) -> list[str]:
         """Close the deal only if the provider confirms a signed envelope that this deal is waiting for."""
@@ -389,6 +521,8 @@ class Orchestrator:
 
         deal = self._crm.get_deal(envelope.deal_id)
         sent = [a for a in self._crm.timeline(deal.id) if a.kind == "io_sent" and a.data.get("envelope_id") == envelope.id]
+        if envelope.status is EnvelopeStatus.VOIDED:
+            return self._flag(deal, "signature_on_voided_io", f"{envelope.id} was replaced by a newer IO")
         if envelope.status is not EnvelopeStatus.SIGNED:
             return self._flag(deal, "signature_unconfirmed", f"provider says {envelope.id} is {envelope.status.value}")
         if not sent or deal.stage is not Stage.SIGNATURE:
@@ -471,3 +605,27 @@ class Orchestrator:
         action = Action(id=f"flag_deal:{deal.id}:{flag}", type=ActionType.FLAG_DEAL, agent=self.name,
                         deal_id=deal.id, summary=f"Flag {flag}: {detail}", payload={"flags": [flag]})
         return self._submit([action])
+
+
+# A reviewer may rewrite an email's wording before approving it; nothing else about an action can be edited.
+EDITABLE_EMAIL_FIELDS = frozenset({"subject", "body"})
+
+
+def _real_edits(request: ApprovalRequest, edits: dict | None) -> dict[str, str]:
+    """The reviewer's actual changes, checked. Raises (so nothing is approved) if they aren't allowed."""
+    if not edits:
+        return {}
+    if request.action.type is not ActionType.SEND_EMAIL:
+        raise ValueError(f"only emails can be edited before approval, not {request.action.type.value}")
+    unknown = set(edits) - EDITABLE_EMAIL_FIELDS
+    if unknown:
+        raise ValueError(f"only the subject and body can be edited, not {', '.join(sorted(unknown))}")
+    cleaned = {field: str(value).strip() for field, value in edits.items()}
+    if not all(cleaned.values()):
+        raise ValueError("an edited subject or body can't be empty")
+    return {field: value for field, value in cleaned.items() if value != request.action.payload.get(field, "").strip()}
+
+
+# Commercial terms a rep may change from the UI; each change redrafts the IO.
+EDITABLE_TERMS = frozenset({"budget_usd", "flight_start", "flight_end", "payment_terms", "contract_term", "special_terms",
+                            "scope"})

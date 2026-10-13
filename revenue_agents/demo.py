@@ -104,10 +104,12 @@ class _Demo:
         first = next((line for line in lines if not line.lower().startswith(GREETINGS)), lines[0])
         self.out(f'    "{first[:100]}{"..." if len(first) > 100 else ""}"')
         event = story.reply_event(reply)
+        deal = next((d for d in self.system.crm.deals() if d.lead_id == reply.lead_id), None)
+        before = len([a for a in self.system.crm.timeline(deal.id) if a.kind == "call_brief"]) if deal else 0
         self.handle(event)
         deal = next((d for d in self.system.crm.deals() if d.lead_id == reply.lead_id), None)
         briefs = [a for a in self.system.crm.timeline(deal.id) if a.kind == "call_brief"] if deal else []
-        if briefs:
+        if len(briefs) > before:  # only a brief this reply produced
             self.out("  Call brief for the rep (before the meeting):")
             for line in briefs[-1].data["markdown"].splitlines():
                 if line.strip():

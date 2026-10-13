@@ -59,7 +59,7 @@ def test_stage_that_does_not_move_is_explained(tmp_path):
     system = build_system(FakeLLM({**llm.responses, "CallDigest": partial}), state_dir=tmp_path)
     system.orchestrator.handle(story.lead_event(system.crm.get_lead("L-001")))
     system.orchestrator.handle(story.call_event(system.crm.get_lead("L-001"),
-                                                story.load_transcripts()["L-001"]))
+                                                story.load_transcripts()["L-001"][0]))
     stays = [span for span in system.tracer.spans() if span.kind == "stage" and "not moved" in span.data["why"]]
     assert stays[0].data["why"].startswith("not moved: qualified needs budget_usd")
 

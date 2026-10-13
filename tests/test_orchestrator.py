@@ -258,12 +258,12 @@ def test_incomplete_call_does_not_qualify(tmp_path, llm, transcript):
     assert any("qualified needs budget_usd" in step for step in report.steps)
 
 
-def test_second_call_after_proposal_does_not_redraft(system, replies, transcript):
+def test_second_call_with_the_same_terms_does_not_redraft(system, replies, transcript):
     system.orchestrator.handle(lead_created("L-001"))
     system.orchestrator.handle(call(transcript))
     again = Event(id="call:L-001:second", type=EventType.CALL_COMPLETED,
                   payload={"lead_id": "L-001", "transcript_id": "second_call", "transcript": transcript})
-    assert system.orchestrator.handle(again).steps[-1] == "Deal already at proposal: IO not redrafted"
+    assert system.orchestrator.handle(again).steps[-1] == "IO terms unchanged: IO-D-001 still stands"
 
 
 def test_blocked_io_flags_the_deal(tmp_path, llm, transcript):

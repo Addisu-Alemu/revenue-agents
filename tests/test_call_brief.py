@@ -118,4 +118,40 @@ def test_terminal_demo_shows_the_brief_and_labels_lesson_use(tmp_path):
     assert "Call brief for the rep (before the meeting):" in output
     assert "Questions to ask (needed before we can send a proposal)" in output
     assert "used in: D-001 (call brief)" in output
-    assert "used in: D-002 (email)" in output
+    assert "D-002 (email)" in output
+    assert "Call brief updated for the next call with BrightBite Burgers: still missing budget usd" in output
+
+
+# --- Two calls: the first leaves things open, the brief prepares the rep for the second -------------
+
+
+def test_calls_are_played_in_the_order_they_happened():
+    assert [path.stem for path in story.load_transcripts()["L-001"]] == ["L-001_intro_call", "L-001_discovery_call"]
+
+
+def test_an_unfinished_call_produces_a_brief_for_the_next_one(system):
+    _, steps = to_meeting(system)
+    lines = story.run(system, steps[3])  # the intro call: no budget or dates yet
+
+    deal = system.crm.get_deal("D-001")
+    assert deal.stage is Stage.MEETING
+    assert "Not qualified yet: no IO drafted" in lines
+    latest = briefs(system)[-1].data["brief"]
+    assert latest["questions"] == ["What budget is set aside for this?", "When should the campaign launch?",
+                                   "How long should the first phase run?"]
+    assert "Ken (CFO): signs the contract" in latest["attendees"]
+    assert "On the call: franchisees break brand guidelines" in latest["what_they_said"]
+    assert "CFO wary of long vendor contracts" in latest["objections"]
+
+
+def test_the_second_call_completes_the_deal_and_clears_what_was_missing(system):
+    _, steps = to_meeting(system)
+    story.run(system, steps[3])
+    assert "missing_budget_usd" in system.crm.get_deal("D-001").flags
+
+    story.run(system, steps[4])  # the call with the CFO
+    deal = system.crm.get_deal("D-001")
+    assert deal.stage is Stage.PROPOSAL  # qualified, and the IO was drafted
+    assert not [flag for flag in deal.flags if flag.startswith("missing_")]
+    assert deal.fields.products  # kept from the first call
+    assert deal.fields.decision_maker == "Ken Adeyemi (CFO)"  # the fuller name from the second call

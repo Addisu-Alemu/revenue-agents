@@ -41,6 +41,7 @@ class ActionHandlers:
             ActionType.PREPARE_CALL_BRIEF: self.prepare_call_brief,
             ActionType.DRAFT_IO: self.draft_io,
             ActionType.SEND_IO: self.send_io,
+            ActionType.VOID_IO: self.void_io,
             ActionType.CLOSE_DEAL: self.close_deal,
         }
 
@@ -61,8 +62,12 @@ class ActionHandlers:
         deal = self._crm.get_deal(action.deal_id)
         merged = deal.fields.model_dump()
         merged.update({key: value for key, value in action.payload.get("fields", {}).items() if value not in (None, "", [])})
-        updates: dict[str, Any] = {"fields": DealFields.model_validate(merged),
-                                   "flags": _merge_flags(deal.flags, action.payload.get("flags", []))}
+        fields = DealFields.model_validate(merged)
+        flags = _merge_flags(deal.flags, action.payload.get("flags", []))
+        # A later call can answer what an earlier one left open: drop "missing_<field>" once the field is known.
+        flags = [flag for flag in flags if not (flag.startswith("missing_") and getattr(fields, flag[8:], None))]
+        flags = [flag for flag in flags if flag not in action.payload.get("clear_flags", [])]  # e.g. a change resolved
+        updates: dict[str, Any] = {"fields": fields, "flags": flags}
         self._crm.save_deal(deal.model_copy(update=updates))
         self._crm.log(deal.id, "note", action.summary,
                       {key: action.payload.get(key, []) for key in ("pains", "objections")})
@@ -88,7 +93,8 @@ class ActionHandlers:
         message = Message(id=f"msg:{action.id}", thread_id=f"T-{action.deal_id}", deal_id=action.deal_id,
                           direction="outbound", sender=SENDER, to=email["to"], subject=email["subject"],
                           body=email["body"], at=utc_now(),
-                          meta={"action_id": action.id, "lessons_used": email.get("lessons_used", [])})
+                          meta={"action_id": action.id, "lessons_used": email.get("lessons_used", []),
+                                "edited_by": email.get("edited_by")})
         self._crm.add_message(message)
         self._crm.log(action.deal_id, "email_sent", f"Email to {email['to']}: {email['subject']}",
                       {**email, "message_id": message.id, "thread_id": message.thread_id})
@@ -101,8 +107,10 @@ class ActionHandlers:
         self._lessons.record_use(action.payload.get("lessons_used", []), used_in=action.id, deal_id=action.deal_id)
 
     def draft_io(self, action: Action) -> None:
+        payload = action.payload
         self._crm.log(action.deal_id, "document", action.summary,
-                      {"io_number": action.payload["io_number"], "document": action.payload["document"]})
+                      {"io_number": payload["io_number"], "document": payload["document"],
+                       "version": payload.get("version", 1), "terms": payload.get("terms", {})})
 
     def send_io(self, action: Action) -> dict[str, str]:
         """Send the IO for e-signature. The envelope id ties the later "signed" webhook to this deal."""
@@ -111,6 +119,13 @@ class ActionHandlers:
         self._crm.log(action.deal_id, "io_sent", f"{action.summary} for e-signature ({envelope.id})",
                       {"io_number": payload["io_number"], "to": payload["to"], "envelope_id": envelope.id})
         return {"status": "sent for e-signature (mock)", "envelope_id": envelope.id}
+
+    def void_io(self, action: Action) -> dict[str, str]:
+        """Withdraw an outdated IO at the e-sign provider, so the customer can't sign it."""
+        envelope = self._esign.void(action.payload["envelope_id"], action.payload["reason"])
+        self._crm.log(action.deal_id, "io_voided", action.summary,
+                      {"envelope_id": envelope.id, "io_number": envelope.io_number, "reason": envelope.void_reason})
+        return {"status": "voided", "envelope_id": envelope.id}
 
     def close_deal(self, action: Action) -> None:
         """Closed won: write the handoff note the delivery team starts from."""

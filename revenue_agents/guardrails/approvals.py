@@ -26,6 +26,7 @@ class ApprovalRequest(Model):
     decided_by: str | None = None
     decided_at: dt.datetime | None = None
     note: str | None = None
+    original_action: Action | None = None  # what the agent proposed, if the reviewer edited it before approving
 
 
 class ApprovalQueue:
@@ -59,13 +60,16 @@ class ApprovalQueue:
     def pending(self) -> list[ApprovalRequest]:
         return [request for request in self._load().values() if request.status is ApprovalStatus.PENDING]
 
-    def approve(self, request_id: str, reviewer: str, note: str | None = None) -> ApprovalRequest:
-        return self._decide(request_id, ApprovalStatus.APPROVED, reviewer, note)
+    def approve(self, request_id: str, reviewer: str, note: str | None = None,
+                edits: dict[str, str] | None = None) -> ApprovalRequest:
+        """Approve, optionally with the reviewer's edits to the payload. The agent's original is kept."""
+        return self._decide(request_id, ApprovalStatus.APPROVED, reviewer, note, edits)
 
     def reject(self, request_id: str, reviewer: str, note: str | None = None) -> ApprovalRequest:
         return self._decide(request_id, ApprovalStatus.REJECTED, reviewer, note)
 
-    def _decide(self, request_id: str, status: ApprovalStatus, reviewer: str, note: str | None) -> ApprovalRequest:
+    def _decide(self, request_id: str, status: ApprovalStatus, reviewer: str, note: str | None,
+                edits: dict[str, str] | None = None) -> ApprovalRequest:
         with locked(self._path):
             requests = self._load()
             request = requests.get(request_id)
@@ -74,9 +78,12 @@ class ApprovalQueue:
             if request.status is not ApprovalStatus.PENDING:
                 raise ValueError(f"request '{request_id}' is already {request.status.value}")
 
-            requests[request_id] = request.model_copy(
-                update={"status": status, "decided_by": reviewer, "decided_at": utc_now(), "note": note}
-            )
+            update = {"status": status, "decided_by": reviewer, "decided_at": utc_now(), "note": note}
+            if edits:
+                payload = {**request.action.payload, **edits, "edited_by": reviewer}
+                update.update(action=request.action.model_copy(update={"payload": payload}),
+                              original_action=request.action)
+            requests[request_id] = request.model_copy(update=update)
             self._save(requests)
             return requests[request_id]
 

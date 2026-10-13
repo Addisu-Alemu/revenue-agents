@@ -17,7 +17,7 @@ from pathlib import Path
 
 from revenue_agents.agents.base import Agent, AgentResult
 from revenue_agents.guardrails.policy import ActionType
-from revenue_agents.models import Deal, Lead, Model
+from revenue_agents.models import Deal, DealFields, Lead, Model
 from revenue_agents.segments import SegmentRegistry
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "data" / "templates" / "io_template.md"
@@ -45,8 +45,9 @@ class DealDeskAgent(Agent):
         self._template = Path(template).read_text(encoding="utf-8")
         self._seller = seller
 
-    def run(self, lead: Lead, deal: Deal, today: dt.date | None = None) -> AgentResult[IODraft]:
-        io_number = f"IO-{deal.id}"
+    def run(self, lead: Lead, deal: Deal, today: dt.date | None = None, version: int = 1) -> AgentResult[IODraft]:
+        """Draft version `version` of the deal's IO (IO-D-001, then IO-D-001-v2, ...)."""
+        io_number = f"IO-{deal.id}" + (f"-v{version}" if version > 1 else "")
         errors = self._validate(lead, deal)
         if errors:
             return AgentResult(output=IODraft(io_number=io_number, errors=errors))
@@ -56,7 +57,8 @@ class DealDeskAgent(Agent):
         if leftover:
             return AgentResult(output=IODraft(io_number=io_number, errors=[f"unfilled template fields: {leftover}"]))
 
-        payload = {"io_number": io_number, "document": document, "to": lead.contact.email}
+        payload = {"io_number": io_number, "document": document, "to": lead.contact.email, "version": version,
+                   "terms": io_terms(deal.fields)}
         actions = [
             self.propose(ActionType.DRAFT_IO, deal, io_number, summary=f"Draft {io_number} for {lead.company}",
                          payload=payload),
@@ -109,6 +111,17 @@ class DealDeskAgent(Agent):
             "special_terms": fields.special_terms or "None",
         }
         return PLACEHOLDER.sub(lambda match: str(values.get(match.group(1), match.group(0))), self._template)
+
+
+# The deal fields an IO is built from. If any of them changes, the IO must be redrafted.
+TERM_FIELDS = ("budget_usd", "products", "scope", "flight_start", "flight_end", "decision_maker", "payment_terms",
+               "contract_term", "special_terms")
+
+
+def io_terms(fields: DealFields) -> dict:
+    """The terms an IO was built from, as plain values (stored with each draft, compared to spot changes)."""
+    data = fields.model_dump(mode="json")
+    return {name: data.get(name) for name in TERM_FIELDS}
 
 
 def _line_items(products: list[str], budget: int) -> str:
