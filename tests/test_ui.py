@@ -57,7 +57,7 @@ def test_app_runs_a_step_and_an_approval():
 
 
 def test_sidebar_shows_the_kill_switch(isolated_state):
-    build_system(make_llm("fake"), state_dir=isolated_state).kill_switch.engage("Bad emails")
+    build_system(make_llm("scripted"), state_dir=isolated_state).kill_switch.engage("Bad emails")
     at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
     assert any("Kill switch ON: Bad emails" in e.value for e in at.sidebar.error)
 
@@ -105,7 +105,7 @@ def test_rejecting_from_the_approvals_page(isolated_state):
     queue = page("approvals")
     button(queue, "Reject").click().run()
     assert not queue.exception
-    system = build_system(make_llm("fake"), state_dir=isolated_state)
+    system = build_system(make_llm("scripted"), state_dir=isolated_state)
     assert system.approvals.pending() == []
     assert system.approvals.all()[0].status.value == "rejected"
 
@@ -125,7 +125,7 @@ def test_the_whole_live_demo_can_be_clicked_through(isolated_state):
         assert not at.exception
 
     assert button(at, "Story complete").disabled
-    system = build_system(make_llm("fake"), state_dir=isolated_state)
+    system = build_system(make_llm("scripted"), state_dir=isolated_state)
     stages = {deal.id: deal.stage.value for deal in system.crm.deals()}
     assert stages == {"D-001": "handoff", "D-002": "replied", "D-003": "scored"}
     assert "event_duplicate" in [event.event for event in system.audit.events()]  # Maya's webhook, sent twice
@@ -140,7 +140,7 @@ def test_reset_asks_first_then_clears_and_confirms(isolated_state):
     button(at, "Yes, reset").click().run()
 
     assert not at.exception
-    assert build_system(make_llm("fake"), state_dir=isolated_state).crm.deals() == []
+    assert build_system(make_llm("scripted"), state_dir=isolated_state).crm.deals() == []
     assert at.toast[0].value.startswith("Demo reset")
     assert not any(b.label == "Yes, reset" for b in at.button)  # the dialog closed
 
@@ -151,11 +151,11 @@ def test_cancelling_the_reset_keeps_everything(isolated_state):
     button(at, "Reset demo").click().run()
     button(at, "Cancel").click().run()
 
-    assert len(build_system(make_llm("fake"), state_dir=isolated_state).crm.deals()) == 3
+    assert len(build_system(make_llm("scripted"), state_dir=isolated_state).crm.deals()) == 3
 
 
 def test_run_now_button_sends_an_approved_but_blocked_email(isolated_state):
-    system = build_system(make_llm("fake"), state_dir=isolated_state)
+    system = build_system(make_llm("scripted"), state_dir=isolated_state)
     system.orchestrator.handle(story.lead_event(system.crm.get_lead("L-001")))
     system.kill_switch.engage("investigating")
     system.orchestrator.handle(story.approval_event("send_email:D-001:first_touch", True, "you@cool.example"))
@@ -170,7 +170,7 @@ def test_run_now_button_sends_an_approved_but_blocked_email(isolated_state):
 
 
 def test_demo_page_explains_a_paused_system(isolated_state):
-    build_system(make_llm("fake"), state_dir=isolated_state).orchestrator.pause("Bad emails", by="ops")
+    build_system(make_llm("scripted"), state_dir=isolated_state).orchestrator.pause("Bad emails", by="ops")
     at = page("demo")
     assert any("Kill switch is ON: new events are held" in e.value for e in at.error)
 
@@ -185,7 +185,7 @@ def test_reject_and_redraft_from_the_ui_with_a_lesson(isolated_state):
     button(at, "Reject & redraft").click().run()
 
     assert not at.exception
-    system = build_system(make_llm("fake"), state_dir=isolated_state)
+    system = build_system(make_llm("scripted"), state_dir=isolated_state)
     assert [r.id for r in system.approvals.pending()] == ["send_email:D-001:first_touch:v2"]
     assert system.lessons.all()[0].source == "review"
     assert any("(draft v2, after review)" in m.value for m in at.markdown)
@@ -319,7 +319,7 @@ def test_editing_an_email_in_the_ui_sends_the_edited_version(isolated_state):
     button(at, "Approve with edits").click().run()
 
     assert not at.exception
-    system = build_system(make_llm("fake"), state_dir=isolated_state)
+    system = build_system(make_llm("scripted"), state_dir=isolated_state)
     [sent] = system.crm.messages("D-001")
     assert "Could we find time for" in sent.body
     assert system.approvals.get("send_email:D-001:first_touch").original_action is not None
@@ -363,7 +363,7 @@ def test_changing_terms_in_the_ui_redrafts_the_io(isolated_state):
     button(at, "Save terms and redraft the IO").click().run()
 
     assert not at.exception
-    system = build_system(make_llm("fake"), state_dir=isolated_state)
+    system = build_system(make_llm("scripted"), state_dir=isolated_state)
     assert [r.id for r in system.approvals.pending()] == ["send_io:D-001:IO-D-001-v2"]
     deal = page("deal")
     assert any("payment terms Net 30 → Net 45" in m.value for m in deal.markdown)

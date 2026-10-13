@@ -91,15 +91,15 @@ def build_system(llm: LLM, state_dir: Path = STATE_DIR, segments_dir: Path = SEG
 
 
 def make_llm(mode: str) -> LLM:
-    """`claude`: the real model (needs ANTHROPIC_API_KEY with credit). `fake`: scripted demo answers.
+    """`claude`: the real model (needs ANTHROPIC_API_KEY with credit). `scripted`: pre-written demo answers.
 
     There is no silent fallback: if `claude` is chosen and fails, the run fails.
     """
     if mode == "claude":
         return ClaudeLLM()
-    if mode == "fake":
+    if mode == "scripted":
         return demo_llm()
-    raise ValueError(f"unknown LLM mode '{mode}': use 'fake' or 'claude'")
+    raise ValueError(f"unknown LLM mode '{mode}': use 'scripted' or 'claude'")
 
 
 def reset_state(state_dir: Path) -> None:

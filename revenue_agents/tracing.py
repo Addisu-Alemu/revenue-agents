@@ -144,7 +144,7 @@ class TracingLLM:
 
     @property
     def label(self) -> str:
-        return getattr(self._llm, "model", None) or "scripted answers (fake mode)"
+        return getattr(self._llm, "model", None) or "scripted answers"
 
     def complete(self, *, system: str, prompt: str, schema: type[T]) -> T:
         start = time.perf_counter()

@@ -8,7 +8,7 @@ services:
     ports:
       - "8501:8501"
     env_file:
-      - path: .env          # ANTHROPIC_API_KEY for --llm claude; optional (fake mode needs no key)
+      - path: .env          # ANTHROPIC_API_KEY for --llm claude; optional (scripted mode needs no key)
         required: false
     volumes:
       - state:/app/state    # deals, approvals, lessons, audit log survive restarts

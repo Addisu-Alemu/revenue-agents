@@ -1,7 +1,7 @@
 """The live demo in the terminal: one segment's story, run through the real system.
 
 The order of events comes from story.py (shared with the UI). High-risk actions
-pause for a human (or are approved automatically with --auto-approve). Fake
+pause for a human (or are approved automatically with --auto-approve). Scripted
 mode is always announced as scripted.
 """
 
@@ -28,15 +28,15 @@ Out = Callable[[str], None]
 Ask = Callable[[str], str]
 
 
-def run(segment: str = "brand", llm_mode: str = "fake", state_dir: Path = DEMO_STATE, auto_approve: bool = False,
+def run(segment: str = "brand", llm_mode: str = "scripted", state_dir: Path = DEMO_STATE, auto_approve: bool = False,
         fresh: bool = True, out: Out = print, ask: Ask = input) -> int:
     state_dir = Path(state_dir)
     if fresh:
         reset_state(state_dir)  # keeps the kill switch: a fresh run never silently turns it off
 
     out(f"Revenue Agents demo | segment: {segment} | model: {llm_mode}")
-    if llm_mode == "fake":
-        out("NOTE: fake mode. Model answers are scripted for this mock data; everything else is the real system.")
+    if llm_mode == "scripted":
+        out("NOTE: scripted mode. Model answers are scripted for this mock data; everything else is the real system.")
     system = build_system(make_llm(llm_mode), state_dir=state_dir)
 
     try:
