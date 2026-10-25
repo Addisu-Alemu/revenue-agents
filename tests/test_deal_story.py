@@ -74,3 +74,20 @@ def test_a_term_changed_later_says_how_it_changed(brightbite):
 
     assert payment.value == "Net 45"
     assert (payment.source, payment.quote) == ("Terms agreed in IO-D-001-v2 (asked in R-004)", None)
+
+
+def test_a_lead_that_waited_for_the_kill_switch_says_so(tmp_path):
+    desk = Desk(tmp_path)
+    desk.start()
+    system = desk.system()
+    system.orchestrator.pause("Checking", by="ops@cool.example")
+    desk.run_until(at(1, 12))
+    desk.world.command("resume", "You released the agents", by="ops@cool.example")
+    desk.step()
+    beats = [f"{beat.at:%H:%M} {beat.actor} {beat.text}" for beat in deal_story.story(system, system.crm.get_deal("D-001"))]
+    set_clock(None)
+
+    assert "09:15 Kill switch agents were paused, so the new lead waited. Nothing was lost." in beats
+    assert any(beat.startswith("12:00 You released the agents (by ops@cool.example)") for beat in beats)
+    assert beats.index(next(b for b in beats if "Research agent" in b)) > beats.index(
+        next(b for b in beats if b.startswith("12:00 You released")))

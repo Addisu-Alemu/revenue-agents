@@ -36,6 +36,7 @@ class Beat:
     text: str
     quote: str | None = None
     tone: str = "agent"  # agent, customer, you, system
+    rank: int = 1  # breaks ties at the same time: a cause (0) before what it caused
 
 
 @dataclass
@@ -112,7 +113,8 @@ def story(system: System, deal: Deal) -> list[Beat]:
                                                   "handed off to delivery.", tone="system"))
         else:
             beats.append(Beat(at, "System", activity.summary, tone="system"))
-    return sorted(beats, key=lambda beat: beat.at)
+    beats += _paused(system, deal, messages.values())
+    return sorted(beats, key=lambda beat: (beat.at, beat.rank))
 
 
 def plan(system: System, world: World | None, deal: Deal) -> Plan:
@@ -174,6 +176,28 @@ def champion_and_signer(system: System, deal: Deal) -> tuple[str, str | None]:
 
 
 # --- Helpers ---------------------------------------------------------------------------
+
+
+def _paused(system: System, deal: Deal, messages) -> list[Beat]:
+    """Events for this deal that waited because the agents were paused, and the release that ran them."""
+    ours = {f"lead:{deal.lead_id}"} | {f"reply:{m.id.removeprefix('msg:reply:')}" for m in messages
+                                       if m.direction == "inbound"}
+    ours |= {f"call:{a.data['transcript_id']}" for a in system.crm.timeline(deal.id) if a.kind == "call"}
+    events = system.audit.events()
+    beats = []
+    for index, event in enumerate(events):
+        if event.event != "event_held" or event.action_id not in ours:
+            continue
+        what = event.action_id.split(":")[0].replace("lead", "the new lead").replace("reply", "a reply").replace(
+            "call", "a call transcript")
+        beats.append(Beat(event.at, "Kill switch", f"agents were paused, so {what} waited. Nothing was lost.",
+                          tone="system"))
+        release = next((later for later in events[index:] if later.event == "kill_switch_released"), None)
+        if release and all(beat.at != release.at for beat in beats):
+            beats.append(Beat(release.at, "You", f"released the agents ({release.detail}); what waited ran then, "
+                                                 "in order.", tone="you", rank=0))
+    return beats
+
 
 
 def _research(deal: Deal) -> str:
