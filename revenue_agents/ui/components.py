@@ -103,12 +103,76 @@ def score_breakdown(score: LeadScore) -> None:
             st.caption(sub.reason)
 
 
-def email_card(email: dict) -> None:
+def email_card(system: System, email: dict) -> None:
     st.markdown(f"**To:** {email['to']}  \n**Subject:** {email['subject']}")
     body = email["body"].strip().replace("<", "&lt;")
     st.markdown(f"<div class='ra-email'>{body}</div>", unsafe_allow_html=True)
-    if email.get("lessons_used"):
-        st.caption(f":material/psychology: Shaped by lessons: {', '.join(email['lessons_used'])}")
+    lesson_notes(system, email.get("lessons_used") or [])
+
+
+# --- Knowledge loop ------------------------------------------------------------------------------
+
+
+def lesson_notes(system: System, lesson_ids: list[str]) -> None:
+    """Which lessons shaped this, in words: what each says and where it was learned."""
+    if not lesson_ids:
+        return
+    known = {lesson.id: lesson for lesson in system.lessons.all()}
+    lines = []
+    for lesson_id in lesson_ids:
+        lesson = known.get(lesson_id)
+        if lesson is None:
+            lines.append(f"- {lesson_id}")
+            continue
+        lines.append(f"- “{_plain(lesson.text)}” <span class='ra-muted'>· learned from {learned_from(lesson)}</span>")
+    st.markdown(":material/psychology: **Shaped by what the system learned:**  \n" + "  \n".join(lines),
+                unsafe_allow_html=True)
+
+
+def knowledge_loop(system: System) -> None:
+    """Every lesson: what it says, where it was learned, who it applies to, and where it has been used."""
+    segment = st.session_state.segment
+    lessons = sorted((lesson for lesson in system.lessons.all() if segment == "all" or lesson.applies_in(segment)),
+                     key=lambda item: item.created_at)
+    uses = {lesson.id: list(dict.fromkeys(used_in(system, use) for use in system.lessons.uses(lesson.id)))
+            for lesson in lessons}
+    used = sum(bool(places) for places in uses.values())
+    with st.expander(f"Knowledge loop: {len(lessons)} learned · {used} used", icon=":material/psychology:"):
+        if not lessons:
+            st.caption("Nothing learned yet. Lessons come from replies, call transcripts and reviewers' notes.")
+            return
+        for lesson in lessons:
+            scope = "all segments" if lesson.scope == "global" else f"{lesson.segment} only"
+            places = uses[lesson.id]
+            st.markdown(f"**“{_escape(_plain(lesson.text))}”**  \n"
+                        f"<span class='ra-muted'>Learned from {learned_from(lesson)} · {scope}</span>  \n"
+                        + (f":material/arrow_forward: Used in: {', '.join(places)}" if places
+                           else "<span class='ra-muted'>Not used yet</span>"),
+                        unsafe_allow_html=True)
+
+
+def learned_from(lesson) -> str:
+    kind = {"call": "call", "reply": "reply", "review": "a reviewer's note on"}.get(lesson.source, lesson.source)
+    return f"{kind} {lesson.source_id}"
+
+
+def used_in(system: System, use) -> str:
+    """A lesson use, in words: "email to Harbor Lane Home", "call brief for BrightBite Burgers"."""
+    try:
+        company = system.crm.get_lead(system.crm.get_deal(use.deal_id).lead_id).company
+    except KeyError:
+        company = use.deal_id
+    kind = use.used_in.split(":")[0]
+    if kind == "send_email":
+        return f"answer email to {company}" if ":reply:" in use.used_in else f"email to {company}"
+    if kind == "prepare_call_brief":
+        return f"call brief for {company}"
+    return f"{kind.replace('_', ' ')} for {company}"
+
+
+def _plain(text: str) -> str:
+    """Model-written text shown with HTML on: no markup gets through."""
+    return text.replace("<", "&lt;")
 
 
 def io_preview(document: str) -> None:
@@ -135,8 +199,6 @@ def editable_email(email: dict, key: str) -> dict[str, str]:
     subject = st.text_input("Subject", value=email["subject"], key=f"{key}-subject")
     body = st.text_area("Email", value=email["body"].strip(), key=f"{key}-body", height=280,
                         help="Edit the wording if you like. Approving sends your version; the agent's draft is kept.")
-    if email.get("lessons_used"):
-        st.caption(f":material/psychology: Shaped by lessons: {', '.join(email['lessons_used'])}")
     edits = {field: value for field, value in (("subject", subject), ("body", body))
              if value.strip() != email[field].strip()}
     if edits:
@@ -284,9 +346,8 @@ def conversation(system: System, deal: Deal) -> None:
                         else "sent automatically (policy: low risk)")
                 if message.meta.get("edited_by"):
                     note += f" · edited by {message.meta['edited_by']} before sending"
-                lessons = message.meta.get("lessons_used") or []
-                st.caption(f":material/verified_user: {note}" + (f" · shaped by lessons: {', '.join(lessons)}"
-                                                                  if lessons else ""))
+                st.caption(f":material/verified_user: {note}")
+                lesson_notes(system, message.meta.get("lessons_used") or [])
                 if request and request.original_action:
                     with st.expander("Show the agent's original draft"):
                         original = request.original_action.payload
@@ -305,7 +366,7 @@ def conversation(system: System, deal: Deal) -> None:
         with st.chat_message("assistant", avatar=":material/edit_note:"):
             st.markdown("**Draft waiting for approval** <span class='ra-muted'>· not sent</span>",
                         unsafe_allow_html=True)
-            email_card(request.action.payload)
+            email_card(system, request.action.payload)
 
 
 def _escape(text: str) -> str:

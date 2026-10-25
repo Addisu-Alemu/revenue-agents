@@ -273,3 +273,20 @@ def test_sidebar_choices_come_back_if_streamlit_drops_them(monkeypatch):
     assert state["llm_mode"] == "claude"  # restored from the saved copy
     assert state["segment"] == "brand"  # kept: the user just chose it
     assert state["reviewer"] == "you@cool.example"  # first visit: default
+
+
+def test_the_knowledge_loop_shows_what_was_learned_and_where_it_was_used(isolated_state):
+    world_until(isolated_state, at(13, 0))
+    test = page("today")
+    text = texts(test)
+
+    assert any(e.label.startswith("Knowledge loop:") for e in test.expander)
+    assert "Learned from call L-001_intro_call · brand only" in text
+    assert "Used in: call brief for BrightBite Burgers, email to Crumb & Co Bakeries" in text
+    assert "email to Northwind Media Partners" in text  # a global lesson crossed into the agency segment
+
+    deal = AppTest.from_file(HARNESS, default_timeout=30)
+    deal.session_state["page"], deal.session_state["selected_deal"] = "deal", "D-007"  # Crumb & Co's email
+    deal.run()
+    assert "Shaped by what the system learned" in texts(deal)  # the sent email names the lesson, in words
+    assert "Franchise brands care more about brand control than speed" in texts(deal)

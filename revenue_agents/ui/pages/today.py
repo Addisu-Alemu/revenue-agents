@@ -112,6 +112,7 @@ def _desk_view() -> None:
         _working_now(desk)
         _coming_up(desk, system)
         _pipeline(system)
+        components.knowledge_loop(system)
 
 
 def _needs_you(system, pending) -> None:
