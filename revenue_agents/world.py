@@ -377,6 +377,8 @@ class Desk:
             return system.orchestrator.resume(by=data["by"])
         if data["name"] == "run_now":
             return system.orchestrator.run_approved(data["request_id"])
+        if data["name"] == "ask":
+            return system.orchestrator.ask(data["goal"], by=data["by"])
         if data["name"] == "keep_coaching":
             return system.orchestrator.keep_coaching(data["request_id"], by=data["by"])
         if data["name"] == "drop_coaching":

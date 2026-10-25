@@ -29,7 +29,7 @@ ATTENTION_FLAGS = ("pricing_requested", "possible_prompt_injection", "objection"
                    "outreach_draft_rejected", "unknown_product_mentioned", "check_flight_dates",
                    "reply_without_outreach", "needs_manual_email", "signature_unconfirmed", "signature_mismatch",
                    "io_change_requested", "signature_on_voided_io", "needs_human", "reply_needs_human",
-                   "call_needs_review", "follow_up_due")
+                   "call_needs_review", "follow_up_due", "copilot_note")
 
 
 class StalledDeal(Model):

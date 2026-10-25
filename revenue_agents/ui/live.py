@@ -75,6 +75,12 @@ def run_now(world: World, request: ApprovalRequest) -> bool:
     return _wait(lambda: not _yours(world))
 
 
+def ask(world: World, goal: str, by: str) -> bool:
+    """Give the copilot a goal. It runs on the desk like every decision; a real model can take a while."""
+    world.command("ask", f"You asked: {goal}", goal=goal, by=by)
+    return _wait(lambda: not _yours(world), timeout=60)
+
+
 def coaching(world: World, request: ApprovalRequest, keep: bool, by: str) -> bool:
     """Keep a reviewer's note as a lesson, or keep it for that one email only. Goes through the desk like a decision."""
     name = "keep_coaching" if keep else "drop_coaching"

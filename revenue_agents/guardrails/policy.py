@@ -69,6 +69,7 @@ AGENT_PERMISSIONS: dict[str, frozenset[ActionType]] = {
     "reply": frozenset({ActionType.CLASSIFY_REPLY, ActionType.FLAG_DEAL, ActionType.RECORD_LESSON,
                         ActionType.SEND_EMAIL, ActionType.BOOK_MEETING, ActionType.SCHEDULE_FOLLOW_UP}),
     "call_intel": frozenset({ActionType.UPDATE_DEAL, ActionType.RECORD_LESSON}),
+    "copilot": frozenset({ActionType.FLAG_DEAL, ActionType.SCHEDULE_FOLLOW_UP}),  # reads anything, changes little
     "call_brief": frozenset({ActionType.PREPARE_CALL_BRIEF}),
     "deal_desk": frozenset(
         {ActionType.DRAFT_IO, ActionType.SEND_PRICING, ActionType.SEND_IO, ActionType.SEND_FOR_SIGNATURE}

@@ -329,3 +329,17 @@ def test_coaching_that_isn_t_a_lesson_yet_can_be_kept_or_left(isolated_state):
     assert (lesson.source, lesson.text, lesson.said_by) == ("review", "Mention their Q1 menu launch", "you@cool.example")
     assert system.orchestrator.open_coaching() == []
     assert "Your coaching, not yet a lesson" not in texts(page("playbook"))
+
+
+def test_the_ask_page_runs_a_goal_and_shows_each_step(isolated_state):
+    desk = world_until(isolated_state, at(9, 0))
+    test = page("ask")
+    button(test, "Which deals went quiet after our first email? Follow up").click().run()
+    button(test, "Run").click().run()
+    desk.step()
+    text = texts(page("ask"))
+
+    assert "What the copilot did" in text
+    assert "<code>search_deals(stage=outreach, quiet_for_days=2)</code>" in text
+    assert "<b>Set a follow-up</b>" in text and "<b>Leave a note for the rep</b>" in text
+    assert "Lumen Media Group: follow-up set for Sun 11 Oct and flagged for the rep." in text

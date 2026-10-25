@@ -90,6 +90,17 @@ CSS = """
   .ra-tool code { background: transparent; padding: 0; color: #111827; }
   .ra-tool span { font-family: ui-monospace, Menlo, monospace; font-size: 0.78rem; color: #6B7280; }
   .ra-tool p { margin: 0.1rem 0 0; font-size: 0.82rem; color: #4B5563; }
+  /* Ask */
+  .ra-step-row { display: grid; grid-template-columns: 1.8rem 1fr; gap: 0.6rem; padding: 0.7rem 0;
+                 border-top: 1px solid #F1F2F5; }
+  .ra-num { width: 1.6rem; height: 1.6rem; border-radius: 50%; border: 1px solid #E5E7EB; display: flex;
+            align-items: center; justify-content: center; font-size: 0.8rem; color: #374151; }
+  .ra-step-top { display: flex; justify-content: space-between; gap: 0.5rem; }
+  .ra-step-top span { font-family: ui-monospace, Menlo, monospace; font-size: 0.78rem; color: #6B7280; }
+  .ra-step-row code { background: transparent; padding: 0; color: #6B7280; font-size: 0.8rem; }
+  .ra-step-row p { margin: 0.15rem 0 0; color: #374151; font-size: 0.92rem; }
+  .ra-step-row.no p { color: #B91C1C; }
+  .ra-copilot-says { background: #F5F3FF; border-radius: 0.6rem; padding: 0.7rem 0.9rem; margin-top: 0.6rem; }
   /* Playbook */
   [class*="st-key-ra-coach"] { background: #F5F3FF; border: 1px solid #DDD6FE; border-radius: 0.8rem;
                                 padding: 1rem 1.1rem; margin-bottom: 1rem; }

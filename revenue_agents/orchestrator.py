@@ -41,6 +41,7 @@ from pydantic import Field
 
 from revenue_agents.agents.call_brief import CallBriefAgent
 from revenue_agents.agents.call_intel import CallIntelAgent, saved_fields
+from revenue_agents.agents.copilot import CopilotAgent
 from revenue_agents.agents.deal_desk import DealDeskAgent, io_terms
 from revenue_agents.agents.outreach import OutreachAgent, Review
 from revenue_agents.agents.reply import CONTRACT_STAGES, ReplyAgent, read_classification
@@ -88,6 +89,7 @@ class Agents:
     call_intel: CallIntelAgent
     call_brief: CallBriefAgent
     deal_desk: DealDeskAgent
+    copilot: CopilotAgent
 
 
 class EventReport(Model):
@@ -584,6 +586,14 @@ class Orchestrator:
                        summary=f"Closed won: {envelope.io_number}, handoff to delivery",
                        payload={"signed_by": envelope.signed_by, "envelope_id": envelope.id})
         return steps + self._submit([close])
+
+    def ask(self, goal: str, by: str) -> list[str]:
+        """A goal in plain words from a person: the copilot works across deals with the same tools and rules."""
+        ask_id = f"ask:{utc_now():%Y%m%dT%H%M%S}"
+        with self._tracer.event(ask_id):
+            self._audit.record(self.name, "copilot_asked", action_id=ask_id, detail=f"{by}: {goal}")
+            run, lines = self._work(self._agents.copilot.task(goal, ask_id))
+        return [f"{by} asked: {goal}"] + lines + ([f"The copilot: {run.summary}"] if run.summary else [])
 
     def _on_follow_up_due(self, event: Event) -> list[str]:
         """A follow-up an agent scheduled is due: remind the rep, once."""

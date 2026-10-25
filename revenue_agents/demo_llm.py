@@ -262,7 +262,24 @@ def _follow_up(call: LLMCall) -> dict[str, Any]:
     return FOLLOW_UPS.get(_reply_id(call), {})
 
 
+def _copilot(call: LLMCall) -> dict[str, Any]:
+    """Read a goal the way a model would: which deals to look at, and which lessons might help."""
+    goal = re.search(r"^Goal from the person: (.+)$", call.prompt, re.MULTILINE)
+    text = goal.group(1).lower() if goal else ""
+    search: dict[str, Any] = {}
+    if "pricing" in text or "price" in text:
+        search["flag"] = "pricing_requested"
+    if any(word in text for word in ("quiet", "stall", "no reply", "silent", "stuck")):
+        search["quiet_for_days"] = 2
+    if any(words in text for words in ("outreach", "no reply", "first email", "never replied")):
+        search["stage"] = "outreach"
+    for segment in ("agency", "brand"):
+        if segment in text:
+            search["segment"] = segment
+    return {"search": search, "lessons": "pricing objection" if "flag" in search else "follow up"}
+
+
 def demo_llm() -> FakeLLM:
     return FakeLLM({"ResearchNote": _research, "ReplyClassification": _reply, "CallDigest": _call,
                     "OutreachDraft": _outreach, "AnswerDraft": _answer, "MeetingPlan": _meeting,
-                    "FollowUpPlan": _follow_up})
+                    "FollowUpPlan": _follow_up, "CopilotPlan": _copilot})

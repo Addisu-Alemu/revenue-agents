@@ -26,6 +26,7 @@ class ToolStep:
     result: str
     is_error: bool = False
     ms: float = 0
+    input: dict = field(default_factory=dict)
 
     @property
     def tone(self) -> str:
@@ -95,7 +96,7 @@ def runs_in(spans: list[Span]) -> list[Run]:
             pending[data.get("agent", "")].append(ToolStep(span.name, data.get("verdict", ""), data.get("outcome"),
                                                            data.get("rule", ""), data.get("reason", ""),
                                                            data.get("result", ""), data.get("is_error", False),
-                                                           span.duration_ms or 0))
+                                                           span.duration_ms or 0, data.get("input") or {}))
         elif span.kind == "agent" and "tool_calls" in span.data:
             data = span.data
             runs.append(Run(span.name, data.get("title", ""), data.get("deal", ""), span.at, data.get("status", ""),

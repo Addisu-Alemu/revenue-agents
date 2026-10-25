@@ -13,6 +13,7 @@ from pathlib import Path
 
 from revenue_agents.agents.call_brief import CallBriefAgent
 from revenue_agents.agents.call_intel import CallIntelAgent
+from revenue_agents.agents.copilot import CopilotAgent
 from revenue_agents.agents.deal_desk import DealDeskAgent
 from revenue_agents.agents.outreach import OutreachAgent
 from revenue_agents.agents.reply import ReplyAgent
@@ -78,6 +79,7 @@ def build_system(runtime: Runtime, state_dir: Path = STATE_DIR, segments_dir: Pa
         call_intel=CallIntelAgent(crm, segments),
         call_brief=TracedAgent(CallBriefAgent(segments), tracer),  # code skills: traced as one step each
         deal_desk=TracedAgent(DealDeskAgent(segments), tracer),
+        copilot=CopilotAgent(crm, lessons, approvals),
     )
     held = HeldEvents(state_dir / "held_events.json")
     failed = HeldEvents(state_dir / "failed_events.json")

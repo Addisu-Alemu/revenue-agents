@@ -22,6 +22,8 @@ JOBS = {
     "reply": "Reads every reply as untrusted text, decides the next step: answers questions, books meetings, sets "
              "follow-ups, hands the rest to a human.",
     "call_intel": "Turns call transcripts into deal fields (checked by code) and lessons for the next deals.",
+    "copilot": "Takes a goal from you in plain words and works across deals. It can read everything and change only "
+               "two low-risk things: a follow-up timer and a note for the rep.",
 }
 SKILLS = {
     "Scoring": "Fit, intent and engagement from the segment pack, in plain code: the tier decides who needs a human, "
@@ -32,7 +34,7 @@ SKILLS = {
 }
 LABELS = {"research": "Research agent", "outreach": "Outreach agent", "reply": "Reply agent",
           "call_intel": "Call intel agent", "call_brief": "Call brief (code skill)", "deal_desk": "Deal desk (code skill)",
-          "orchestrator": "Orchestrator"}
+          "orchestrator": "Orchestrator", "copilot": "Copilot"}
 
 
 @dataclass(frozen=True)
@@ -70,7 +72,8 @@ def roster(system: System) -> list[AgentCard]:
     ours = Message(id="msg:preview", thread_id="T-preview", deal_id=deal.id, direction="outbound", sender="us",
                    to=lead.contact.email, subject="hi", body="Hi.", at=now)
     tasks = [agents.research.task(lead, deal), agents.outreach.first_touch(lead, deal),
-             agents.reply.task(reply, lead, deal, ours), agents.call_intel.task("preview", "", lead, deal)]
+             agents.reply.task(reply, lead, deal, ours), agents.call_intel.task("preview", "", lead, deal),
+             agents.copilot.task("preview", "ask:preview")]
     email = email_rule(system)
     return [AgentCard(task.agent, LABELS[task.agent], JOBS[task.agent],
                       [_tool(tool, email) for tool in task.tools]) for task in tasks]
