@@ -33,6 +33,7 @@ REPLY_ANSWERS: dict[str, dict[str, Any]] = {
         "objections": [],
         "suggested_next_step": "Offer Tuesday or Wednesday afternoon and invite the CFO.",
         "lesson": "Franchise marketers respond to the pain of slow local versions of national ads.",
+        "lesson_quote": "Right now each regional version takes our team weeks.",
     },
     "R-004": {
         "intent": "interested",
@@ -82,6 +83,12 @@ CALL_ANSWERS: dict[str, dict[str, Any]] = {
         "general_lessons": [
             "When your contact can't approve the budget, ask early who signs and book the next call with them.",
         ],
+        "lesson_quotes": {
+            "Franchise brands care more about brand control than speed: lead with locked fields and approval workflow.":
+                "Brand consistency matters more to me than speed.",
+            "When your contact can't approve the budget, ask early who signs and book the next call with them.":
+                "But budget and contract terms aren't my call.",
+        },
     },
     # Second call, with the CFO: everything the IO needs.
     "L-001_discovery_call": {
@@ -119,6 +126,14 @@ CALL_ANSWERS: dict[str, dict[str, Any]] = {
             "Buyers burned by long vendor contracts respond to a short pilot with an option to extend.",
             "When finance joins the call, show how return will be measured before discussing cost.",
         ],
+        "lesson_quotes": {
+            "Franchise CFOs judge a pilot on results per location: lead with location-level measurement.":
+                "If it works, we'd roll it out to all locations in the second half of the year.",
+            "Buyers burned by long vendor contracts respond to a short pilot with an option to extend.":
+                "I'd want a three-month pilot with an option to extend, not a twelve-month commitment.",
+            "When finance joins the call, show how return will be measured before discussing cost.":
+                "What I need to understand is cost and how we would measure return.",
+        },
     },
 }
 

@@ -40,6 +40,9 @@ CSS = """
   .ra-column-title { font-weight: 650; font-size: 0.9rem; color: #374151; margin-bottom: 0.2rem; }
   .ra-email { background: #F8F9FC; border: 1px solid #E5E7EB; border-left: 3px solid #4F46E5;
               border-radius: 0.5rem; padding: 0.8rem 1rem; white-space: pre-wrap; font-size: 0.92rem; }
+  /* Playbook */
+  [class*="st-key-ra-coach"] { background: #F5F3FF; border: 1px solid #DDD6FE; border-radius: 0.8rem;
+                                padding: 1rem 1.1rem; margin-bottom: 1rem; }
   /* Deal room */
   .ra-stages { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 6px; margin: 0.4rem 0 1.2rem; }
   .ra-stages div { border-top: 4px solid #E5E7EB; padding-top: 6px; font-size: 0.78rem; color: #6B7280; }
@@ -163,28 +166,6 @@ def lesson_notes(system: System, lesson_ids: list[str]) -> None:
         lines.append(f"- “{_plain(lesson.text)}” <span class='ra-muted'>· learned from {learned_from(lesson)}</span>")
     st.markdown(":material/psychology: **Shaped by what the system learned:**  \n" + "  \n".join(lines),
                 unsafe_allow_html=True)
-
-
-def knowledge_loop(system: System) -> None:
-    """Every lesson: what it says, where it was learned, who it applies to, and where it has been used."""
-    segment = st.session_state.segment
-    lessons = sorted((lesson for lesson in system.lessons.all() if segment == "all" or lesson.applies_in(segment)),
-                     key=lambda item: item.created_at)
-    uses = {lesson.id: list(dict.fromkeys(used_in(system, use) for use in system.lessons.uses(lesson.id)))
-            for lesson in lessons}
-    used = sum(bool(places) for places in uses.values())
-    with st.expander(f"Knowledge loop: {len(lessons)} learned · {used} used", icon=":material/psychology:"):
-        if not lessons:
-            st.caption("Nothing learned yet. Lessons come from replies, call transcripts and reviewers' notes.")
-            return
-        for lesson in lessons:
-            scope = "all segments" if lesson.scope == "global" else f"{lesson.segment} only"
-            places = uses[lesson.id]
-            st.markdown(f"**“{_escape(_plain(lesson.text))}”**  \n"
-                        f"<span class='ra-muted'>Learned from {learned_from(lesson)} · {scope}</span>  \n"
-                        + (f":material/arrow_forward: Used in: {', '.join(places)}" if places
-                           else "<span class='ra-muted'>Not used yet</span>"),
-                        unsafe_allow_html=True)
 
 
 def learned_from(lesson) -> str:

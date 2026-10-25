@@ -284,11 +284,38 @@ class Orchestrator:
     def _lesson_from_review(self, request: ApprovalRequest, note: str) -> list[str]:
         deal = self._crm.get_deal(request.action.deal_id)
         lesson = Lesson(id=f"lesson:review:{request.id}", segment=deal.segment, source="review",
-                        source_id=request.id, text=note, created_at=utc_now())
+                        source_id=request.id, text=note, created_at=utc_now(), quote=note,
+                        said_by=request.decided_by)
         action = Action(id=f"record_lesson:{deal.id}:{lesson.id}", type=ActionType.RECORD_LESSON, agent=self.name,
                         deal_id=deal.id, summary=f"Lesson from {request.decided_by}'s review: {note}",
                         payload={"lesson": lesson.model_dump(mode="json")})
         return self._submit([action])
+
+    # --- Coaching that isn't a lesson yet (the Playbook) ---------------------------------------
+
+    def open_coaching(self) -> list[ApprovalRequest]:
+        """Emails a reviewer rejected with a note that wasn't kept as a lesson, and wasn't set aside either."""
+        kept = {lesson.source_id for lesson in self._lessons.all() if lesson.source == "review"}
+        dropped = {event.action_id for event in self._audit.events() if event.event == "coaching_kept_for_one_email"}
+        return [request for request in self._approvals.all()
+                if request.status is ApprovalStatus.REJECTED and (request.note or "").strip()
+                and request.action.type is ActionType.SEND_EMAIL and request.id not in kept | dropped]
+
+    def keep_coaching(self, request_id: str, by: str) -> list[str]:
+        """A reviewer's note becomes a lesson for every later email in the segment (the same path as ticking the box)."""
+        request = self._approvals.get(request_id)
+        if request not in self.open_coaching():
+            return [f"{request_id}: nothing to keep"]
+        self._audit.record(self.name, "coaching_kept_as_lesson", deal_id=request.action.deal_id,
+                           action_id=request_id, detail=f"by {by}")
+        return self._lesson_from_review(request, request.note.strip())
+
+    def drop_coaching(self, request_id: str, by: str) -> list[str]:
+        """The note was only for that one email: keep it on the record, but it never becomes a lesson."""
+        request = self._approvals.get(request_id)
+        self._audit.record(self.name, "coaching_kept_for_one_email", deal_id=request.action.deal_id,
+                           action_id=request_id, detail=f"by {by}")
+        return [f"Coaching on {request_id} kept for that email only"]
 
     def _redraft(self, request: ApprovalRequest, note: str) -> list[str]:
         """The outreach agent writes the next version with the reviewer's note. It still needs approval."""

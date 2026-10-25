@@ -203,6 +203,10 @@ class Lesson(Model):
     applies_to: list[str] = Field(default_factory=lambda: ["outreach", "call_brief"])
     scope: Literal["segment", "global"] = "segment"
     created_at: dt.datetime
+    # The words it was learned from, checked against the source before it was kept (None if there was no match).
+    quote: str | None = None
+    said_by: str | None = None
+    said_at: str | None = None  # the transcript timestamp, for a call
 
     def applies_in(self, segment: str) -> bool:
         return self.scope == "global" or self.segment == segment

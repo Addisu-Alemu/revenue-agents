@@ -14,7 +14,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from revenue_agents.ui import components, context, live
-from revenue_agents.ui.pages import agent_trace, deal_detail, inbox, pipeline, team, today
+from revenue_agents.ui.pages import agent_trace, deal_detail, inbox, pipeline, playbook, team, today
 
 ASSETS = Path(__file__).resolve().parent / "assets"
 
@@ -38,6 +38,7 @@ st.session_state.pages = {
     "pipeline": st.Page(pipeline.render, title="Pipeline", icon=":material/view_kanban:", url_path="pipeline"),
     "deal": st.Page(deal_detail.render, title="Deal room", icon=":material/person_search:", url_path="deal"),
     "team": st.Page(team.render, title="Team", icon=":material/groups:", url_path="team"),
+    "playbook": st.Page(playbook.render, title="Playbook", icon=":material/menu_book:", url_path="playbook"),
     "trace": st.Page(agent_trace.render, title="Agent trace", icon=":material/account_tree:", url_path="trace"),
 }
 pages = st.session_state.pages
@@ -86,5 +87,5 @@ with st.sidebar:
 st.navigation({
     "Desk": [pages["today"], pages["inbox"]],
     "Deals": [pages["pipeline"], pages["deal"]],
-    "Agents": [pages["team"], pages["trace"]],
+    "Agents": [pages["team"], pages["playbook"], pages["trace"]],
 }).run()

@@ -112,7 +112,7 @@ def _desk_view() -> None:
         _working_now(desk)
         _coming_up(desk, system)
         _pipeline(system)
-        components.knowledge_loop(system)
+        _learned(system)
 
 
 def _needs_you(system, pending) -> None:
@@ -202,6 +202,16 @@ def _pipeline(system) -> None:
     proposal = [d for d in deals if d.stage in (Stage.PROPOSAL, Stage.SIGNATURE) and d.fields.budget_usd]
     if proposal:
         st.caption(f"\\${sum(d.fields.budget_usd for d in proposal):,} in proposals and signatures")
+
+
+def _learned(system) -> None:
+    lessons = system.lessons.all()
+    used = sum(bool(system.lessons.uses(lesson.id)) for lesson in lessons)
+    with st.container(border=True):
+        text, link = st.columns([3, 1.2], vertical_alignment="center")
+        text.markdown(f":material/psychology: **{len(lessons)} lessons learned · {used} used** in emails and briefs")
+        if link.button("Playbook", key="open-playbook", icon=":material/arrow_forward:", type="tertiary"):
+            st.switch_page(st.session_state.pages["playbook"])
 
 
 def _shown(entry: feed.Entry) -> bool:

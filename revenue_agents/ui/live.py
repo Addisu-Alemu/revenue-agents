@@ -75,6 +75,14 @@ def run_now(world: World, request: ApprovalRequest) -> bool:
     return _wait(lambda: not _yours(world))
 
 
+def coaching(world: World, request: ApprovalRequest, keep: bool, by: str) -> bool:
+    """Keep a reviewer's note as a lesson, or keep it for that one email only. Goes through the desk like a decision."""
+    name = "keep_coaching" if keep else "drop_coaching"
+    label = "You kept your note as a lesson" if keep else "You kept your note for that email only"
+    world.command(name, f"{label}: {request.note}", request_id=request.id, by=by)
+    return _wait(lambda: not _yours(world))
+
+
 def pause_agents(system: System, reason: str, by: str) -> None:
     system.orchestrator.pause(reason, by=by)
 

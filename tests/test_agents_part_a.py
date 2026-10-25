@@ -283,3 +283,18 @@ def test_each_field_keeps_the_words_it_came_from_and_invented_quotes_are_dropped
     assert (budget["speaker"], budget["at"], budget["value"]) == ("Ken Adeyemi", "00:01:30", "250000")
     assert "scope" not in note.data["sources"]
     assert "Quotes not found in the transcript, dropped: scope" in result.called("update_deal_fields")[0].result
+
+
+def test_a_lesson_keeps_the_words_it_was_learned_from_only_if_they_were_said(tmp_path, transcript):
+    real = "I'd want a three-month pilot with an option to extend, not a twelve-month commitment."
+    answer = {**BRIGHTBITE_CALL, "lessons": ["Buyers burned by long contracts want a short pilot."], "general_lessons": [],
+              "lesson_quotes": {"Buyers burned by long contracts want a short pilot.": real}}
+    system, _, _ = call_run(tmp_path, transcript, answer)
+    [lesson] = system.lessons.all()
+    assert (lesson.quote, lesson.said_by, lesson.said_at) == (real, "Ken Adeyemi", "00:04:20")
+
+    invented = {**answer, "lesson_quotes": {"Buyers burned by long contracts want a short pilot.": "We hate contracts."}}
+    system, result, _ = call_run(tmp_path / "again", transcript, invented)
+    [lesson] = system.lessons.all()
+    assert (lesson.quote, lesson.said_by) == (None, None)  # saved, but without a source it can't prove
+    assert "saved without one" in result.called("record_lesson")[0].result

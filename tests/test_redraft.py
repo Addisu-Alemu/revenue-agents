@@ -157,3 +157,15 @@ def test_a_redraft_that_breaks_the_rules_flags_the_deal(tmp_path, llm):
 
     assert pending_ids(system) == []
     assert "outreach_draft_rejected" in system.crm.get_deal("D-001").flags
+
+
+def test_a_note_can_be_kept_for_that_email_only(system):
+    reject(system, "send_email:D-001:first_touch")
+    assert [r.id for r in system.orchestrator.open_coaching()] == ["send_email:D-001:first_touch"]
+
+    system.orchestrator.drop_coaching("send_email:D-001:first_touch", by=REVIEWER)
+
+    assert system.orchestrator.open_coaching() == []
+    assert system.lessons.all() == []
+    assert system.orchestrator.keep_coaching("send_email:D-001:first_touch", by=REVIEWER) == [
+        "send_email:D-001:first_touch: nothing to keep"]

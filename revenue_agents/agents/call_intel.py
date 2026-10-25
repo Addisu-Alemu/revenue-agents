@@ -43,7 +43,8 @@ sources: for each field you fill, the field name and a short quote, copied word 
 supports it. Code checks every quote against the transcript; a quote that isn't there is dropped.
 Lessons: up to three reusable, one-sentence insights about selling to this kind of customer (scope "segment"), not
 facts about this one deal. An insight that would help sell to any kind of customer, e.g. how to handle a contract,
-budget or timing objection, has scope "global" (up to two). Never record the same insight twice.
+budget or timing objection, has scope "global" (up to two). Never record the same insight twice. With each lesson,
+give the quote from the transcript it was learned from, word for word.
 update_deal_fields tells you which fields it accepted and what is still missing for a proposal.
 When you are done, reply with one short sentence and stop."""
 
@@ -71,6 +72,7 @@ class CallDigest(Model):
     objections: list[str] = Field(default_factory=list)
     lessons: list[str] = Field(default_factory=list, max_length=3)
     general_lessons: list[str] = Field(default_factory=list, max_length=2)  # apply to every segment
+    lesson_quotes: dict[str, str] = Field(default_factory=dict)  # lesson text -> the words it was learned from
 
 
 class DealUpdate(DealFields):
@@ -82,6 +84,7 @@ class DealUpdate(DealFields):
 class LessonInput(Model):
     text: str = Field(max_length=300)
     scope: Literal["segment", "global"] = "segment"
+    quote: str = Field(default="", max_length=300, description="The words in the transcript it was learned from")
 
 
 class CallIntelAgent(Agent):
@@ -143,14 +146,19 @@ class CallIntelAgent(Agent):
         def lesson(args: LessonInput):
             number = counts[args.scope]
             lesson_id = f"lesson:{transcript_id}:" + (f"g{number}" if args.scope == "global" else str(number))
+            line = find_line(args.quote, transcript)
             item = Lesson(id=lesson_id, segment=lead.segment, source="call", source_id=transcript_id,
-                          text=args.text.strip(), created_at=utc_now(), scope=args.scope)
+                          text=args.text.strip(), created_at=utc_now(), scope=args.scope,
+                          quote=args.quote.strip() if line else None,
+                          said_by=line["speaker"].strip() if line else None, said_at=line["at"] if line else None)
             return self.propose(ActionType.RECORD_LESSON, deal, lesson_id, summary=f"Lesson: {item.text}",
                                 payload={"lesson": item.model_dump(mode="json")})
 
         def lesson_saved(args: LessonInput, result: ActionResult) -> ToolResult:
             counts[args.scope] += 1
-            return ToolResult(text=f"Lesson saved ({args.scope}).")
+            unmatched = " The quote isn't in the transcript, so it was saved without one." if args.quote and \
+                not find_line(args.quote, transcript) else ""
+            return ToolResult(text=f"Lesson saved ({args.scope}).{unmatched}")
 
         def script(s: Script) -> None:
             s.call("read_transcript")
@@ -159,9 +167,9 @@ class CallIntelAgent(Agent):
             s.call("update_deal_fields", **digest.deal_fields.model_dump(mode="json"), pains=digest.pains,
                    objections=digest.objections, sources=[source.model_dump() for source in digest.sources])
             for text in digest.lessons:
-                s.call("record_lesson", text=text, scope="segment")
+                s.call("record_lesson", text=text, scope="segment", quote=digest.lesson_quotes.get(text, ""))
             for text in digest.general_lessons:
-                s.call("record_lesson", text=text, scope="global")
+                s.call("record_lesson", text=text, scope="global", quote=digest.lesson_quotes.get(text, ""))
             s.say(f"Call {transcript_id} read.")
 
         tools = [
@@ -195,19 +203,24 @@ def locate_quotes(sources: list[FieldSource], fields: DealFields, transcript: st
 
     Returns the kept sources by field, and the fields whose quote wasn't found.
     """
-    lines = [match for line in transcript.splitlines() if (match := TRANSCRIPT_LINE.match(line.strip()))]
     kept, dropped = {}, []
     for source in sources:
         if getattr(fields, source.field) in (None, "", []):
             continue  # a quote for a field that wasn't kept (e.g. invalid dates) proves nothing
-        quote = _words(source.quote)
-        line = next((match for match in lines if quote and quote in _words(match["text"])), None)
+        line = find_line(source.quote, transcript)
         if line is None:
             dropped.append(source.field)
             continue
         kept[source.field] = {"quote": source.quote.strip(), "speaker": line["speaker"].strip(), "at": line["at"],
                               "transcript_id": transcript_id, "value": str(getattr(fields, source.field))}
     return kept, dropped
+
+
+def find_line(quote: str, transcript: str) -> re.Match | None:
+    """The transcript line that contains these words (ignoring case and punctuation), if any."""
+    words = _words(quote)
+    lines = (TRANSCRIPT_LINE.match(line.strip()) for line in transcript.splitlines())
+    return next((match for match in lines if match and words and words in _words(match["text"])), None)
 
 
 def _words(text: str) -> str:

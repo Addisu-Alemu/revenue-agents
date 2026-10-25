@@ -275,15 +275,19 @@ def test_sidebar_choices_come_back_if_streamlit_drops_them(monkeypatch):
     assert state["reviewer"] == "you@cool.example"  # first visit: default
 
 
-def test_the_knowledge_loop_shows_what_was_learned_and_where_it_was_used(isolated_state):
+def test_the_playbook_shows_what_was_learned_where_from_and_where_it_was_used(isolated_state):
     world_until(isolated_state, at(13, 0))
-    test = page("today")
+    test = page("playbook")
     text = texts(test)
 
-    assert any(e.label.startswith("Knowledge loop:") for e in test.expander)
-    assert "Learned from call L-001_intro_call · brand only" in text
-    assert "Used in: call brief for BrightBite Burgers, email to Crumb & Co Bakeries" in text
+    assert not test.exception
+    assert "**Franchise brands care more about brand control than speed: lead with locked fields and approval " \
+           "workflow.**" in text
+    assert "From the intro call, Maya Thompson at 00:01:28: “Brand consistency matters more to me than speed.”" in text
+    assert ":violet-badge[used in call brief for BrightBite Burgers, email to Crumb & Co Bakeries]" in text
     assert "email to Northwind Media Partners" in text  # a global lesson crossed into the agency segment
+    assert "Brands (franchise and multi-location)" in text and "First contact needs you for Tier A/B" in text
+    assert "6 lessons learned" in texts(page("today"))  # Today keeps a one-line summary
 
     deal = AppTest.from_file(HARNESS, default_timeout=30)
     deal.session_state["page"], deal.session_state["selected_deal"] = "deal", "D-007"  # Crumb & Co's email
@@ -302,3 +306,20 @@ def test_the_deal_room_tells_the_story_and_the_plan(isolated_state):
     assert "Deal fields, with where each came from" in text
     assert "Ken, discovery call 00:01:30" in text
     assert "Closed won and handed off to delivery. Nothing left to do here." in text
+
+
+def test_coaching_that_isn_t_a_lesson_yet_can_be_kept_or_left(isolated_state):
+    desk = world_until(isolated_state, at(1, 10), approve=False)
+    desk.world.submit(approval_event(MAYA_EMAIL, False, "you@cool.example", "Mention their Q1 menu launch"), "Coach")
+    desk.step()
+    test = page("playbook")
+    assert "Your coaching, not yet a lesson" in texts(test)
+    assert "**“Mention their Q1 menu launch”**" in texts(test)
+
+    button(test, "Keep for brand first emails").click().run()
+    desk.step()
+    system = desk.system()
+    [lesson] = system.lessons.all()
+    assert (lesson.source, lesson.text, lesson.said_by) == ("review", "Mention their Q1 menu launch", "you@cool.example")
+    assert system.orchestrator.open_coaching() == []
+    assert "Your coaching, not yet a lesson" not in texts(page("playbook"))
