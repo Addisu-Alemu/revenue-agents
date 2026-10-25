@@ -25,6 +25,7 @@ class ToolStep:
     reason: str
     result: str
     is_error: bool = False
+    ms: float = 0
 
     @property
     def tone(self) -> str:
@@ -93,7 +94,8 @@ def runs_in(spans: list[Span]) -> list[Run]:
             data = span.data
             pending[data.get("agent", "")].append(ToolStep(span.name, data.get("verdict", ""), data.get("outcome"),
                                                            data.get("rule", ""), data.get("reason", ""),
-                                                           data.get("result", ""), data.get("is_error", False)))
+                                                           data.get("result", ""), data.get("is_error", False),
+                                                           span.duration_ms or 0))
         elif span.kind == "agent" and "tool_calls" in span.data:
             data = span.data
             runs.append(Run(span.name, data.get("title", ""), data.get("deal", ""), span.at, data.get("status", ""),

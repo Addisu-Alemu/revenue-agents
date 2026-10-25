@@ -40,6 +40,55 @@ CSS = """
   .ra-column-title { font-weight: 650; font-size: 0.9rem; color: #374151; margin-bottom: 0.2rem; }
   .ra-email { background: #F8F9FC; border: 1px solid #E5E7EB; border-left: 3px solid #4F46E5;
               border-radius: 0.5rem; padding: 0.8rem 1rem; white-space: pre-wrap; font-size: 0.92rem; }
+  /* Today */
+  .ra-date { font-size: 0.85rem; color: #6B7280; }
+  .ra-headline { font-size: 2.3rem; font-weight: 700; margin: 0.1rem 0 0.2rem; padding: 0; }
+  .ra-lede { color: #4B5563; margin: 0; }
+  .ra-status { font-size: 0.75rem; padding: 1px 8px; border-radius: 999px; background: #F3F4F6; color: #4B5563; }
+  .ra-status.run { background: #DCFCE7; color: #166534; } .ra-status.busy { background: #DBEAFE; color: #1E40AF; }
+  .ra-status.stop { background: #FEE2E2; color: #991B1B; }
+  .st-key-ra-kill button { border-color: #DC2626; color: #DC2626; }
+  .ra-need { display: grid; grid-template-columns: 0.9rem 1fr; gap: 0.5rem; align-items: baseline; }
+  .ra-meta { font-family: ui-monospace, Menlo, monospace; font-size: 0.78rem; color: #6B7280; }
+  .ra-need-title { font-weight: 650; font-size: 1.05rem; margin: 0.15rem 0; }
+  .ra-need-why { color: #374151; font-size: 0.93rem; }
+  .ra-rule { display: inline-block; margin-top: 0.4rem; font-size: 0.8rem; background: #F3F4F6; border-radius: 999px;
+             padding: 1px 10px; }
+  .ra-rule::first-letter { color: #DC2626; }
+  .ra-feed-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 0.5rem; }
+  .ra-feed-head h4 { margin: 0; }
+  .ra-feed-head span { font-size: 0.8rem; color: #6B7280; }
+  .ra-feed-head i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 4px 0 10px; }
+  .ra-row { display: grid; grid-template-columns: 4.6rem 0.8rem 1fr; gap: 0.5rem; align-items: baseline;
+            padding: 0.6rem 0; border-top: 1px solid #F1F2F5; font-size: 0.93rem; }
+  .ra-row-text { color: #374151; margin-top: 0.15rem; }
+  .ra-company { color: #4B5563; }
+  .ra-outcome { font-size: 0.72rem; background: #F3F4F6; border-radius: 999px; padding: 1px 8px; margin-left: 4px; }
+  .ra-chips { margin-top: 0.35rem; display: flex; flex-wrap: wrap; gap: 4px; }
+  .ra-chip { font-family: ui-monospace, Menlo, monospace; font-size: 0.74rem; border: 1px solid #E5E7EB;
+             border-radius: 4px; padding: 1px 6px; color: #4B5563; background: #FFFFFF; }
+  .ra-chip.ok { color: #166534; border-color: #BBF7D0; } .ra-chip.fix { color: #92400E; border-color: #FDE68A; }
+  .ra-chip.ask { color: #C2410C; border-color: #FDBA74; } .ra-chip.no { color: #B91C1C; border-color: #FECACA; }
+  .st-key-ra-working { background: #17132A; border-radius: 0.8rem; padding: 1rem 1.1rem; }
+  .st-key-ra-working h5, .st-key-ra-working p, .st-key-ra-working b { color: #F5F3FF; }
+  .st-key-ra-working .ra-chip { background: transparent; color: #E9D5FF; border-color: #4C3F75; }
+  .ra-calling { font-size: 0.82rem; opacity: 0.75; }
+  .ra-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .ra-tiles div { background: #F8F9FC; border-radius: 0.5rem; padding: 0.5rem 0.6rem; }
+  .ra-tiles b { display: block; font-size: 1.4rem; } .ra-tiles span { font-size: 0.78rem; color: #6B7280; }
+  /* Inbox */
+  .ra-detail-title { margin: 0.2rem 0 0.6rem; padding: 0; }
+  .ra-stopped { background: #FFF4ED; border-radius: 0.6rem; padding: 0.7rem 0.9rem; }
+  .ra-stopped b { color: #9A3412; } .ra-stopped div { margin: 0.2rem 0; color: #374151; }
+  .ra-stopped code { font-size: 0.78rem; background: transparent; color: #6B7280; padding: 0; }
+  .ra-tag { float: right; font-family: ui-monospace, Menlo, monospace; font-size: 0.75rem; background: #F3F4F6;
+            border-radius: 4px; padding: 1px 8px; }
+  .st-key-ra-coach-inbox { background: #F5F3FF; border: 1px solid #DDD6FE; border-radius: 0.8rem; padding: 1rem; }
+  .ra-tool { border-top: 1px solid #F1F2F5; padding: 0.45rem 0; }
+  .ra-tool div { display: flex; justify-content: space-between; gap: 0.5rem; }
+  .ra-tool code { background: transparent; padding: 0; color: #111827; }
+  .ra-tool span { font-family: ui-monospace, Menlo, monospace; font-size: 0.78rem; color: #6B7280; }
+  .ra-tool p { margin: 0.1rem 0 0; font-size: 0.82rem; color: #4B5563; }
   /* Playbook */
   [class*="st-key-ra-coach"] { background: #F5F3FF; border: 1px solid #DDD6FE; border-radius: 0.8rem;
                                 padding: 1rem 1.1rem; margin-bottom: 1rem; }

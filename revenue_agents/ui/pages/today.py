@@ -14,10 +14,12 @@ import streamlit as st
 
 from revenue_agents.models import Stage
 from revenue_agents.team import LABELS
-from revenue_agents.ui import agent_views, components, context, feed, live
+from revenue_agents.ui import agent_views, components, context, desk_views, feed, live
 from revenue_agents.world import SPEEDS
 
 SPEED_NAMES = {value: name for name, value in SPEEDS.items()}
+DOTS = {"on its own": "#7C3AED", "asked you": "#DC2626", "refused": "#DC2626", "failed": "#DC2626",
+        "read only": "#9CA3AF"}
 PIPELINE = [("New", (Stage.PROSPECT, Stage.ENRICHED, Stage.SCORED)), ("Contacted", (Stage.OUTREACH,)),
             ("Talking", (Stage.REPLIED, Stage.MEETING)), ("Proposal", (Stage.QUALIFIED, Stage.PROPOSAL)),
             ("Signature", (Stage.SIGNATURE,)), ("Won", (Stage.HANDOFF,)), ("Lost", (Stage.CLOSED_LOST,))]
@@ -50,18 +52,29 @@ def _controls(desk) -> None:
     state = desk.world.read()
     system = desk.system()
     paused_agents = system.kill_switch.is_engaged()
-    title, buttons = st.columns([3, 4], vertical_alignment="center")
-    with title:
-        st.title("Today")
+    pending = [r for r in system.approvals.pending() if context.in_segment(system.crm.get_deal(r.action.deal_id))]
+    acted = feed.acted_on_their_own(system.tracer.spans())
+    headline = ("1 decision needs you" if len(pending) == 1 else
+                f"{len(pending)} decisions need you" if pending else "Nothing needs you")
+    head, buttons = st.columns([3, 3.4], vertical_alignment="bottom")
+    with head:
         if state.working:
-            status = f":blue-badge[:material/progress_activity: working: {state.working}]"
+            status = f"<span class='ra-status busy'>working: {_html(state.working)}</span>"
         elif state.running:
-            status = f":green-badge[running · {SPEED_NAMES.get(state.speed, f'{state.speed} s/s')}]"
+            status = f"<span class='ra-status run'>running · {SPEED_NAMES.get(state.speed, f'{state.speed} s/s')}</span>"
         else:
-            status = ":gray-badge[clock paused]"
-        st.markdown(f"**{state.now:%a %d %b %Y · %H:%M} UTC** &nbsp; {status}"
-                    + (" &nbsp; :red-badge[agents paused]" if paused_agents else ""))
+            status = "<span class='ra-status'>clock paused</span>"
+        if paused_agents:
+            status += " <span class='ra-status stop'>agents paused</span>"
+        st.markdown(f"<div class='ra-date'>{state.now:%A %d %B · %H:%M} UTC &nbsp; {status}</div>"
+                    f"<h1 class='ra-headline'>{headline}</h1>"
+                    f"<p class='ra-lede'>So far your agents took {acted} action{'s' if acted != 1 else ''} on their "
+                    "own. Everything they did is below, with the tools they used.</p>", unsafe_allow_html=True)
     with buttons, st.container(horizontal=True, horizontal_alignment="right", vertical_alignment="center"):
+        speed = st.segmented_control("Speed", list(SPEEDS), default=SPEED_NAMES.get(state.speed), key="speed",
+                                     label_visibility="collapsed")
+        if speed and SPEEDS[speed] != state.speed:
+            desk.world.set_speed(SPEEDS[speed])
         if state.running:
             if st.button("Pause clock", icon=":material/pause:"):
                 desk.world.pause()
@@ -72,15 +85,11 @@ def _controls(desk) -> None:
         if st.button("Next arrival", icon=":material/skip_next:", help="Jump the clock to the next thing that arrives"):
             desk.world.skip()
             st.rerun(scope="fragment")
-        speed = st.segmented_control("Speed", list(SPEEDS), default=SPEED_NAMES.get(state.speed), key="speed",
-                                     label_visibility="collapsed")
-        if speed and SPEEDS[speed] != state.speed:
-            desk.world.set_speed(SPEEDS[speed])
         if paused_agents:
             if st.button("Release agents", icon=":material/play_circle:", type="primary"):
                 live.resume_agents(desk.world, context.reviewer())
                 st.rerun(scope="fragment")
-        elif st.button("Pause all agents", icon=":material/front_hand:",
+        elif st.button("Pause all agents", icon=":material/pause_circle:", key="ra-kill",
                        help="The kill switch: nothing reaches a customer or the CRM; events wait in order"):
             live.pause_agents(system, "Paused from Today", context.reviewer())
             st.rerun(scope="fragment")
@@ -100,14 +109,11 @@ def _desk_view() -> None:
     system = desk.system()
     spans = system.tracer.spans()
     pending = [r for r in system.approvals.pending() if context.in_segment(system.crm.get_deal(r.action.deal_id))]
-    acted = feed.acted_on_their_own(spans)
-    decisions = "1 decision needs you" if len(pending) == 1 else f"{len(pending) or 'No'} decisions need you"
-    st.subheader(f"{decisions} · {acted} action{'s' if acted != 1 else ''} the agents took on their own")
 
-    left, right = st.columns([3, 2], gap="large")
+    left, right = st.columns([3, 1.35], gap="large")
     with left:
-        _needs_you(system, pending)
-        _what_they_did(desk, spans)
+        _needs_you(system, spans, pending)
+        _what_they_did(desk, system, spans)
     with right:
         _working_now(desk)
         _coming_up(desk, system)
@@ -115,8 +121,11 @@ def _desk_view() -> None:
         _learned(system)
 
 
-def _needs_you(system, pending) -> None:
-    st.markdown("##### Needs you")
+def _needs_you(system, spans, pending) -> None:
+    title, link = st.columns([4, 1], vertical_alignment="bottom")
+    title.markdown("#### Needs you")
+    if pending and link.button("Open inbox", key="open-inbox", type="tertiary"):
+        st.switch_page(st.session_state.pages["inbox"])
     if not pending:
         st.caption("Nothing waits for you. The agents are working within the rules.")
         return
@@ -124,56 +133,85 @@ def _needs_you(system, pending) -> None:
     for request in sorted(pending, key=lambda r: r.created_at):
         deal = system.crm.get_deal(request.action.deal_id)
         lead = system.crm.get_lead(deal.lead_id)
-        tier = f"Tier {deal.score.tier.value}" if deal.score else "no tier"
+        tier = f"Tier {deal.score.tier.value} · {deal.score.total:g}" if deal.score else "no tier"
+        _, rule = desk_views.stopped_by(spans, request)
         with st.container(border=True):
-            text, button = st.columns([5, 1.3], vertical_alignment="center")
-            text.markdown(f"**{request.action.summary}**  \n<span class='ra-muted'>{lead.company} · {tier} · waiting "
-                          f"{_ago(now - request.created_at)} · {request.reason}</span>", unsafe_allow_html=True)
-            if button.button("Review", key=f"review-{request.id}", icon=":material/arrow_forward:"):
+            text, button = st.columns([6, 1], vertical_alignment="top")
+            text.markdown(
+                f"<div class='ra-need'><span class='ra-dot' style='background:#DC2626'></span><div>"
+                f"<div class='ra-meta'>{_html(lead.company)} · {tier} · waiting {_ago(now - request.created_at)}</div>"
+                f"<div class='ra-need-title'>{_html(request.action.summary)}</div>"
+                f"<div class='ra-need-why'>{_html(desk_views.context_line(system, request))}</div>"
+                f"<span class='ra-rule'>● Rule: {_html(rule)}</span></div></div>", unsafe_allow_html=True)
+            if button.button("Review", key=f"review-{request.id}", type="tertiary"):
                 st.session_state.inbox_selected = request.id
                 st.switch_page(st.session_state.pages["inbox"])
 
 
-def _what_they_did(desk, spans) -> None:
-    st.markdown("##### What happened")
-    entries = [entry for entry in feed.entries(desk.world, spans) if _shown(entry)]
-    if not entries:
-        st.caption("Nothing yet. Press Play (or Next arrival): the first lead arrives at 09:15.")
-        return
-    for entry in entries[:15]:
-        with st.container(border=True):
-            held = " &nbsp; :orange-badge[waits: agents paused]" if entry.status == "held" else ""
-            st.markdown(f"<span class='ra-muted'>{entry.at:%a %H:%M} · {_who(entry.source)}</span> &nbsp; "
-                        f"**{_clean(entry.label)}**{held}", unsafe_allow_html=True)
-            for run in entry.runs:
-                st.markdown(agent_views.run_line(run))
-            if entry.steps:
-                with st.expander("What the system did", icon=":material/list:"):
-                    st.markdown("  \n".join(components.styled_line(line) for line in entry.steps if line))
+def _what_they_did(desk, system, spans) -> None:
+    with st.container(border=True):
+        st.markdown("<div class='ra-feed-head'><h4>What your agents did</h4><span>"
+                    "<i style='background:#7C3AED'></i>on its own <i style='background:#DC2626'></i>asked you "
+                    "<i style='background:#111827'></i>you</span></div>", unsafe_allow_html=True)
+        rows = _rows(system, [entry for entry in feed.entries(desk.world, spans) if _shown(entry)])
+        if not rows:
+            st.caption("Nothing yet. Press Play (or Next arrival): the first lead arrives at 09:15.")
+            return
+        st.markdown("".join(rows[:40]), unsafe_allow_html=True)
+
+
+def _rows(system, entries) -> list[str]:
+    """One row per agent run (newest first), plus your decisions and what arrived without an agent run."""
+    companies = {deal.id: system.crm.get_lead(deal.lead_id).company for deal in system.crm.deals()}
+    rows = []
+    for entry in entries:
+        if entry.status == "held":
+            rows.append(_row(entry.at, "#F59E0B", "Kill switch", "", f"{entry.label}: waits until you release the "
+                                                                    "agents. Nothing is lost.", ""))
+            continue
+        for run in reversed(entry.runs):
+            color = DOTS.get(run.outcome, "#7C3AED")
+            rows.append(_row(run.at, color, run.label, companies.get(run.deal, ""), run.summary or run.title,
+                             agent_views.chips_html(run.tools), run.outcome))
+        if entry.runs:
+            continue
+        if entry.source == "you":
+            rows.append(_row(entry.at, "#111827", "You", "", entry.label, ""))
+        else:
+            detail = next((step for step in entry.steps if step and not step.startswith("Daily digest")), "")
+            who = {"scheduler": "Scheduler", "timer": "Timer"}.get(entry.source, "Arrived")
+            rows.append(_row(entry.at, "#9CA3AF", who, "", f"{entry.label}" + (f": {detail}" if detail else ""), ""))
+    return rows
+
+
+def _row(at, color: str, who: str, company: str, text: str, chips: str, outcome: str = "") -> str:
+    chip = f"<span class='ra-outcome'>{outcome}</span>" if outcome else ""
+    where = f" <span class='ra-company'>{_html(company)}</span>" if company else ""
+    tools = f"<div class='ra-chips'>{chips}</div>" if chips else ""
+    return (f"<div class='ra-row'><span class='ra-time'>{at:%a %H:%M}</span><span class='ra-dot' "
+            f"style='background:{color}'></span><div><b>{_html(who)}</b>{where} {chip}"
+            f"<div class='ra-row-text'>{_html(text)}</div>{tools}</div></div>")
 
 
 def _working_now(desk) -> None:
-    st.markdown("##### Working now")
     board = desk.live.read()
-    with st.container(border=True):
+    with st.container(key="ra-working"):
+        st.markdown("##### Working now")
         if not board:
             state = desk.world.read()
             upcoming = [item.at for item in state.queue if item.at > state.now]
-            if state.running and upcoming:
-                st.caption(f"All caught up. Next arrival {min(upcoming):%a %H:%M}.")
-            else:
-                st.caption("All caught up.")
+            nxt = f" Next arrival {min(upcoming):%a %H:%M}." if upcoming else ""
+            st.markdown(f"<p>All caught up.{nxt}</p>", unsafe_allow_html=True)
             return
-        st.markdown(f":material/progress_activity: **{_clean(board.get('item', ''))}**")
-        if board.get("agent"):
-            st.markdown(f"**{LABELS.get(board['agent'], board['agent'])}** · {_clean(board.get('title') or '')}")
         steps = [feed.ToolStep(step["tool"], step.get("verdict") or "", step.get("outcome"), "", "",
                                step.get("result") or "") for step in board.get("steps", [])]
-        if steps:
-            st.markdown(agent_views.chips(steps))
-            st.caption(_clean(steps[-1].result)[:160])
-        if board.get("tool"):
-            st.caption(f"calling {board['tool']}…")
+        agent = (f"<p><b>{LABELS.get(board['agent'], board['agent'])}</b> · {_html(board.get('title') or '')}</p>"
+                 if board.get("agent") else "")
+        calling = f"<p class='ra-calling'>calling {_html(board['tool'])}…</p>" if board.get("tool") else ""
+        last = f"<p class='ra-calling'>{_html(steps[-1].result[:160])}</p>" if steps else ""
+        st.markdown(f"<p><b>{_html(board.get('item', ''))}</b></p>{agent}"
+                    f"<div class='ra-chips'>{agent_views.chips_html(steps)}</div>{last}{calling}",
+                    unsafe_allow_html=True)
 
 
 def _coming_up(desk, system) -> None:
@@ -195,13 +233,19 @@ def _coming_up(desk, system) -> None:
 
 
 def _pipeline(system) -> None:
-    st.markdown("##### Pipeline")
     deals = [deal for deal in system.crm.deals() if context.in_segment(deal)]
-    st.markdown(" ".join(f":{'violet' if count else 'gray'}-badge[{name} · {count}]" for name, count in
-                         ((name, sum(deal.stage in stages for deal in deals)) for name, stages in PIPELINE)))
+    counts = [(name, sum(deal.stage in stages for deal in deals)) for name, stages in PIPELINE]
+    tiles = "".join(f"<div><b>{count}</b><span>{name}</span></div>" for name, count in counts if count)
     proposal = [d for d in deals if d.stage in (Stage.PROPOSAL, Stage.SIGNATURE) and d.fields.budget_usd]
-    if proposal:
-        st.caption(f"\\${sum(d.fields.budget_usd for d in proposal):,} in proposals and signatures")
+    money = (f"<p class='ra-muted'>&#36;{sum(d.fields.budget_usd for d in proposal):,} in proposals and signatures"
+             "</p>" if proposal else "")
+    with st.container(border=True):
+        title, link = st.columns([3, 1.4], vertical_alignment="bottom")
+        title.markdown("##### Pipeline")
+        if link.button("Deals", key="open-pipeline", type="tertiary"):
+            st.switch_page(st.session_state.pages["pipeline"])
+        st.markdown(f"<div class='ra-tiles'>{tiles or '<p class=ra-muted>No deals yet.</p>'}</div>{money}",
+                    unsafe_allow_html=True)
 
 
 def _learned(system) -> None:
@@ -236,3 +280,8 @@ def _ago(delta: dt.timedelta) -> str:
 
 def _clean(text: str) -> str:
     return text.replace("$", "\\$")
+
+
+def _html(text: str) -> str:
+    """Text shown inside HTML: no markup, dollar signs as text."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace("$", "&#36;")

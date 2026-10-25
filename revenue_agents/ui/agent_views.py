@@ -8,6 +8,7 @@ did with each call.
 from __future__ import annotations
 
 from collections import defaultdict
+from html import escape
 
 import streamlit as st
 
@@ -24,6 +25,15 @@ OUTCOME_COLORS = {"on its own": "green", "asked you": "orange", "refused": "red"
 def chips(steps: list[ToolStep]) -> str:
     """The tools a run called, in order, as small badges: grey reads, green done, orange waits for you, red refused."""
     return " ".join(f":{TONES[step.tone][0]}-badge[{step.tool}{TONES[step.tone][1]}]" for step in steps)
+
+
+CHIP_CLASSES = {"read": "", "done": "ok", "fix": "fix", "asked": "ask", "refused": "no"}
+
+
+def chips_html(steps: list[ToolStep]) -> str:
+    """The same tool chips as HTML, for rows drawn in HTML (monospace, like the mockup)."""
+    return "".join(f"<span class='ra-chip {CHIP_CLASSES[step.tone]}'>{escape(step.tool)}{TONES[step.tone][1]}</span>"
+                   for step in steps)
 
 
 def run_line(run: Run) -> str:

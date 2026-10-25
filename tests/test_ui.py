@@ -84,11 +84,14 @@ def test_today_shows_what_needs_you_and_what_the_agents_did(isolated_state):
     text = texts(test)
 
     assert not test.exception
-    assert test.subheader[0].value.startswith("1 decision needs you · 3 actions the agents took on their own")
-    assert "**First email to Maya Thompson at BrightBite Burgers**" in text
-    assert "**Research agent** · Research BrightBite Burgers" in text
-    assert ":orange-badge[send_email · asks you]" in text
-    assert "Thu 01 Oct 2026 · 10:00 UTC" in text
+    assert "<h1 class='ra-headline'>1 decision needs you</h1>" in text
+    assert "So far your agents took 3 actions on their own." in text
+    assert "<div class='ra-need-title'>First email to Maya Thompson at BrightBite Burgers</div>" in text
+    assert "Built around: 60 new franchise locations" in text  # why this email, from the research note
+    assert "● Rule: first contact with a top-tier lead" in text  # the rule the trace recorded
+    assert "<b>Research agent</b> <span class='ra-company'>BrightBite Burgers</span>" in text
+    assert "<span class='ra-chip ask'>send_email · asks you</span>" in text
+    assert "Thursday 01 October · 10:00 UTC" in text
 
 
 def test_review_opens_the_inbox_on_that_item(isolated_state):
@@ -110,7 +113,7 @@ def test_pausing_the_agents_holds_what_arrives_and_release_replays_it(isolated_s
     desk.world.skip()
     assert desk.step().status == "held"  # BrightBite arrives and waits
     test = app()
-    assert ":orange-badge[waits: agents paused]" in texts(test)
+    assert "New lead: BrightBite Burgers: waits until you release the agents. Nothing is lost." in texts(test)
 
     button(test, "Release agents").click().run()
     released = desk.step()
@@ -124,7 +127,7 @@ def test_pausing_the_agents_holds_what_arrives_and_release_replays_it(isolated_s
 def test_approving_in_the_inbox_goes_through_the_desk(isolated_state):
     desk = world_until(isolated_state, at(1, 10), approve=False)
     test = page("inbox")
-    assert "Why it stopped:" in test.warning[0].value
+    assert "● Why it stopped: first contact with a top-tier lead" in texts(test)
 
     button(test, "Approve").click().run()
     assert not test.exception
@@ -156,8 +159,11 @@ def test_the_inbox_shows_what_the_agent_did_and_what_it_used(isolated_state):
     world_until(isolated_state, at(1, 10), approve=False)
     text = texts(page("inbox"))
 
-    assert "**What the outreach agent did** · First email to Maya Thompson at BrightBite Burgers" in text
-    assert ":gray-badge[read_account] :gray-badge[search_lessons] :gray-badge[draft_email]" in text
+    assert "<h5>What the agent did</h5><div class='ra-muted'>Outreach agent · scripted answers</div>" in text
+    assert [tool for tool in ("read_account", "search_lessons", "draft_email", "send_email")
+            if f"<code>{tool}</code>" in text] == ["read_account", "search_lessons", "draft_email", "send_email"]
+    assert "<code>policy.first_touch_tier · PreToolUse hook on send_email, then the gateway</code>" in text
+    assert "proposed by Outreach agent at Thu 09:15" in text
     assert "**Why now** (research agent): 60 new franchise locations" in text
 
 
