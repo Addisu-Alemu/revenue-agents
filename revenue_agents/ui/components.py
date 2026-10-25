@@ -47,6 +47,7 @@ CSS = """
   .ra-status { font-size: 0.75rem; padding: 1px 8px; border-radius: 999px; background: #F3F4F6; color: #4B5563; }
   .ra-status.run { background: #DCFCE7; color: #166534; } .ra-status.busy { background: #DBEAFE; color: #1E40AF; }
   .ra-status.stop { background: #FEE2E2; color: #991B1B; }
+  .ra-status.ask { background: #FFEDD5; color: #9A3412; }
   .st-key-ra-kill button { border-color: #DC2626; color: #DC2626; }
   .ra-need { display: grid; grid-template-columns: 0.9rem 1fr; gap: 0.5rem; align-items: baseline; }
   .ra-meta { font-family: ui-monospace, Menlo, monospace; font-size: 0.78rem; color: #6B7280; }

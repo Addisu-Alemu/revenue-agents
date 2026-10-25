@@ -62,6 +62,8 @@ def _controls(desk) -> None:
             status = f"<span class='ra-status busy'>working: {_html(state.working)}</span>"
         elif state.running:
             status = f"<span class='ra-status run'>running · {SPEED_NAMES.get(state.speed, f'{state.speed} s/s')}</span>"
+        elif state.paused_for:
+            status = f"<span class='ra-status ask'>clock paused: {_html(state.paused_for)}</span>"
         else:
             status = "<span class='ra-status'>clock paused</span>"
         if paused_agents:

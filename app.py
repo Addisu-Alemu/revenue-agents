@@ -73,6 +73,12 @@ with st.sidebar:
         st.badge("Scripted decisions", icon=":material/science:", color="orange")
     else:
         st.badge("Live Claude", icon=":material/bolt:", color="green")
+    if desk.world.exists():
+        auto = st.toggle("Pause the clock when something needs you", value=desk.world.read().auto_pause,
+                         help="The world waits for your decision instead of running on. Your decisions are "
+                              "delivered at once either way.")
+        if auto != desk.world.read().auto_pause:
+            desk.world.set_auto_pause(auto)
     st.text_input("Reviewer (you)", key="reviewer", help="Recorded on every decision you make.")
     context.remember_settings()
     if waiting:

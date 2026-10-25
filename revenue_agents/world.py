@@ -84,6 +84,8 @@ class WorldState(Model):
     beats: list[str] = Field(default_factory=list)  # buyer beats already scheduled
     working: str | None = None  # the label of what is being delivered right now
     error: str | None = None
+    auto_pause: bool = True  # pause the clock when something new waits for you
+    paused_for: str | None = None  # why the clock paused itself, e.g. "First email to Maya Thompson waits for you"
 
 
 class World:
@@ -134,7 +136,15 @@ class World:
         return state
 
     def play(self) -> None:
-        self._change(lambda s: s.model_copy(update={"running": True, "error": None}))
+        self._change(lambda s: s.model_copy(update={"running": True, "error": None, "paused_for": None}))
+
+    def set_auto_pause(self, on: bool) -> None:
+        self._change(lambda s: s.model_copy(update={"auto_pause": on}))
+
+    def wait_for_you(self, why: str) -> None:
+        """Something new needs a human: stop the clock (if it runs and auto-pause is on) and say why."""
+        self._change(lambda s: s.model_copy(update={"running": False, "paused_for": why})
+                     if s.running and s.auto_pause else s)
 
     def pause(self) -> None:
         self._change(lambda s: s.model_copy(update={"running": False}))
@@ -277,6 +287,7 @@ class Desk:
 
     def deliver(self, item: Item) -> Delivered:
         system = self.system()
+        waiting = {request.id for request in system.approvals.pending()}
         self.live.begin(item)
         events: list[str] = []
         before = system.tracer.count()
@@ -297,6 +308,10 @@ class Desk:
         finally:
             self.live.end()
         self.plan(system)
+        new = [request for request in system.approvals.pending() if request.id not in waiting]
+        if new:
+            more = f" (and {len(new) - 1} more)" if len(new) > 1 else ""
+            self.world.wait_for_you(f"{new[0].action.summary} waits for you{more}")
         delivered = Delivered(id=item.id, at=self.world.now(), label=item.label, source=item.source, status=status,
                               steps=steps, events=events)
         self.world.finish(item, delivered)

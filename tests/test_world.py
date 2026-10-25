@@ -275,3 +275,31 @@ def test_a_world_without_a_file_uses_the_real_time(tmp_path):
     world = World(tmp_path)
     assert not world.exists()
     assert abs((world.now() - dt.datetime.now(UTC)).total_seconds()) < 5
+
+
+def test_the_clock_pauses_itself_when_something_new_needs_you(desk):
+    desk.world.play()
+    desk.world.skip()
+    desk.step()  # BrightBite: the Tier A first email waits for a human
+
+    state = desk.world.read()
+    assert not state.running
+    assert state.paused_for == "First email to Maya Thompson at BrightBite Burgers waits for you"
+
+    desk.world.play()  # carry on with it still waiting: only something new pauses again
+    assert desk.world.read().paused_for is None
+    desk.world.skip()
+    desk.step()  # Lumen, Tier A in the agency pack: new, so it pauses again
+    assert desk.world.read().paused_for.startswith("First email to Priya Raman")
+
+    desk.world.play()
+    desk.world.advance(1)  # nothing new arrives between items
+    assert desk.world.read().running
+
+
+def test_auto_pause_can_be_turned_off(desk):
+    desk.world.set_auto_pause(False)
+    desk.world.play()
+    desk.world.skip()
+    desk.step()
+    assert desk.world.read().running and desk.system().approvals.pending()
