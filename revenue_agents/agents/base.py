@@ -1,8 +1,11 @@
 """What every agent shares: a name, and a way to propose actions with stable ids.
 
-Agents never execute. They return an AgentResult: their findings plus the
-actions they propose. The orchestrator sends those actions to the gateway,
-which applies the autonomy policy.
+Agents never execute. The AI agents (research, outreach, reply, call intel)
+build a task for the runtime: their tools propose actions, and each one goes
+through the PreToolUse hook and the gateway. The code skills (call brief, deal
+desk) return an AgentResult: their findings plus the actions they propose,
+which the orchestrator sends to the gateway. Either way the autonomy policy
+decides what runs.
 """
 
 from __future__ import annotations

@@ -9,6 +9,7 @@ from revenue_agents.guardrails.kill_switch import KillSwitch
 from revenue_agents.guardrails.policy import Action, ActionType, AutonomyPolicy, Decision
 from revenue_agents.models import Stage, Tier
 from revenue_agents.skills.scoring import score_lead
+from revenue_agents.runtime import ScriptedRuntime
 from revenue_agents.system import build_system
 
 
@@ -68,7 +69,7 @@ def test_agency_demo_runs_end_to_end(tmp_path):
 
 
 def test_a_global_lesson_from_a_brand_call_shapes_agency_outreach(tmp_path, transcript):
-    system = build_system(demo_llm(), state_dir=tmp_path)
+    system = build_system(ScriptedRuntime(demo_llm()), state_dir=tmp_path)
     system.orchestrator.handle(Event(id="lead:L-001", type=EventType.LEAD_CREATED, payload={"lead_id": "L-001"}))
     system.orchestrator.handle(Event(id="call:1", type=EventType.CALL_COMPLETED, payload={
         "lead_id": "L-001", "transcript_id": "L-001_discovery_call", "transcript": transcript}))

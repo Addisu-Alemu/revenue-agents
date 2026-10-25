@@ -1,226 +1,264 @@
-"""The UI renders every page and its buttons go through the orchestrator. No browser needed (Streamlit AppTest)."""
+"""The UI shows the live world and sends every decision through it. No browser needed (Streamlit AppTest).
 
+The background runner is off in these tests (REVENUE_AGENTS_RUNNER=off): each test moves the world itself, so
+what a page shows and what a click does can be checked one step at a time.
+"""
+
+import datetime as dt
 from pathlib import Path
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from revenue_agents import story
-from revenue_agents.demo import run
-from revenue_agents.system import build_system, make_llm
+from revenue_agents.events import approval_event
+from revenue_agents.storage import set_clock
+from revenue_agents.world import Desk, World
 
 ROOT = Path(__file__).resolve().parent.parent
 HARNESS = str(ROOT / "tests" / "ui_harness.py")
+APP = str(ROOT / "app.py")
+MAYA_EMAIL = "send_email:D-001:first_touch"
 
 
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setenv("REVENUE_AGENTS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("REVENUE_AGENTS_RUNNER", "off")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    return tmp_path / "state"
+    yield tmp_path / "state"
+    set_clock(None)
+
+
+def at(day, hour, minute=0):
+    return dt.datetime(2026, 10, day, hour, minute, tzinfo=dt.timezone.utc)
+
+
+def world_until(state_dir, when, approve=True) -> Desk:
+    desk = Desk(state_dir)
+    if not desk.world.exists():
+        desk.start()
+
+    def approve_all():
+        for request in desk.system().approvals.pending():
+            desk.world.submit(approval_event(request.id, True, "you@cool.example"), f"Approved {request.id}")
+
+    desk.run_until(when, between=approve_all if approve else None)
+    return desk
 
 
 def page(name):
-    at = AppTest.from_file(HARNESS, default_timeout=30)
-    at.session_state["page"] = name
-    return at.run()
+    test = AppTest.from_file(HARNESS, default_timeout=30)
+    test.session_state["page"] = name
+    return test.run()
 
 
-def texts(at):
-    return "\n".join([m.value for m in at.markdown] + [c.value for c in at.caption] + [t.value for t in at.title])
+def app():
+    return AppTest.from_file(APP, default_timeout=30).run()
 
 
-def button(at, label):
-    return next(b for b in at.button if b.label.startswith(label))
+def texts(test):
+    return "\n".join([m.value for m in test.markdown] + [c.value for c in test.caption] + [t.value for t in test.title]
+                     + [h.value for h in test.subheader])
 
 
-def full_story(state_dir):
-    run(state_dir=state_dir, auto_approve=True, fresh=True, out=lambda line: None)
+def button(test, label):
+    return next(b for b in test.button if b.label.startswith(label))
 
 
-# --- Main app --------------------------------------------------------------------------
+# --- Today ------------------------------------------------------------------------------------
 
 
-def test_app_runs_a_step_and_an_approval():
-    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
-    assert not at.exception
-    assert at.title[0].value == "Live demo"
+def test_today_offers_to_start_the_world(isolated_state):
+    test = app()
+    assert not test.exception
+    assert test.title[0].value == "Today"
 
-    button(at, "Next: New lead: BrightBite").click().run()
-    assert "1 high-risk action(s) waiting for a human" in at.info[0].value
-    assert button(at, "Next:").disabled  # can't continue while a human decision is pending
-
-    button(at, "Approve").click().run()
-    assert not at.exception
-    assert "**Approved: First email to Maya Thompson at BrightBite Burgers**" in texts(at)
-    assert not button(at, "Next:").disabled
+    button(test, "Start").click().run()
+    assert not test.exception
+    assert World(isolated_state).read().running
 
 
-def test_sidebar_shows_the_kill_switch(isolated_state):
-    build_system(make_llm("scripted"), state_dir=isolated_state).kill_switch.engage("Bad emails")
-    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
-    assert any("Kill switch ON: Bad emails" in e.value for e in at.sidebar.error)
+def test_today_shows_what_needs_you_and_what_the_agents_did(isolated_state):
+    world_until(isolated_state, at(1, 10), approve=False)
+    test = app()
+    text = texts(test)
+
+    assert not test.exception
+    assert test.subheader[0].value.startswith("1 decision needs you · 3 actions the agents took on their own")
+    assert "**First email to Maya Thompson at BrightBite Burgers**" in text
+    assert "**Research agent** · Research BrightBite Burgers" in text
+    assert ":orange-badge[send_email · asks you]" in text
+    assert "Thu 01 Oct 2026 · 10:00 UTC" in text
 
 
-# --- Pages, empty and full ---------------------------------------------------------------
+def test_review_opens_the_inbox_on_that_item(isolated_state):
+    world_until(isolated_state, at(1, 10), approve=False)
+    test = app()
+    button(test, "Review").click().run()
+
+    assert not test.exception
+    assert test.session_state["inbox_selected"] == MAYA_EMAIL
+    assert test.title[0].value == "Inbox"
 
 
-@pytest.mark.parametrize("name", ["demo", "pipeline", "deal", "approvals"])
+def test_pausing_the_agents_holds_what_arrives_and_release_replays_it(isolated_state):
+    desk = world_until(isolated_state, at(1, 9))
+    test = app()
+    button(test, "Pause all agents").click().run()
+    assert desk.system().kill_switch.is_engaged()
+
+    desk.world.skip()
+    assert desk.step().status == "held"  # BrightBite arrives and waits
+    test = app()
+    assert ":orange-badge[waits: agents paused]" in texts(test)
+
+    button(test, "Release agents").click().run()
+    released = desk.step()
+    assert released.label == "You released the agents"
+    assert "New lead: BrightBite Burgers (brand) -> deal D-001" in " ".join(released.steps)
+
+
+# --- Inbox --------------------------------------------------------------------------------------
+
+
+def test_approving_in_the_inbox_goes_through_the_desk(isolated_state):
+    desk = world_until(isolated_state, at(1, 10), approve=False)
+    test = page("inbox")
+    assert "Why it stopped:" in test.warning[0].value
+
+    button(test, "Approve").click().run()
+    assert not test.exception
+    [item] = [item for item in desk.world.read().queue if item.source == "you"]
+    assert item.label == "Approved by you: First email to Maya Thompson at BrightBite Burgers"
+
+    desk.step()
+    system = desk.system()
+    assert system.approvals.get(MAYA_EMAIL).status.value == "approved"
+    assert [a.kind for a in system.crm.timeline("D-001")][-2:] == ["email_sent", "stage_change"]
+
+
+def test_coaching_redrafts_and_can_teach_a_lesson(isolated_state):
+    desk = world_until(isolated_state, at(1, 10), approve=False)
+    test = page("inbox")
+    test.text_area(key=f"detail-{MAYA_EMAIL}-note").input("Mention their Q1 menu launch")
+    test.checkbox(key=f"detail-{MAYA_EMAIL}-lesson").check()
+    test.run()
+    button(test, "Redraft").click().run()
+    desk.step()
+
+    system = desk.system()
+    assert [r.id for r in system.approvals.pending()] == [f"{MAYA_EMAIL}:v2"]
+    assert system.lessons.all()[0].source == "review"
+    assert any("(draft v2, after review)" in m.value for m in page("inbox").markdown)
+
+
+def test_the_inbox_shows_what_the_agent_did_and_what_it_used(isolated_state):
+    world_until(isolated_state, at(1, 10), approve=False)
+    text = texts(page("inbox"))
+
+    assert "**What the outreach agent did** · First email to Maya Thompson at BrightBite Burgers" in text
+    assert ":gray-badge[read_account] :gray-badge[search_lessons] :gray-badge[draft_email]" in text
+    assert "**Why now** (research agent): 60 new franchise locations" in text
+
+
+def test_run_now_sends_an_approved_but_blocked_email(isolated_state):
+    desk = world_until(isolated_state, at(1, 10), approve=False)
+    desk.system().kill_switch.engage("Checking")
+    desk.world.submit(approval_event(MAYA_EMAIL, True, "you@cool.example"), "Approved while paused")
+    desk.step()
+    desk.system().kill_switch.release()
+
+    test = page("inbox")
+    button(test, "Run now").click().run()
+    desk.step()
+    assert desk.system().crm.get_deal("D-001").stage.value == "outreach"
+
+
+# --- Team and trace ----------------------------------------------------------------------------
+
+
+def test_team_page_is_generated_from_the_code(isolated_state):
+    test = page("team")
+    text = texts(test)
+
+    assert not test.exception
+    assert ":material/smart_toy: **Reply agent**" in text
+    assert "`book_meeting` &nbsp; :green-badge[on its own]" in text
+    assert "asks you for top tiers (agency: Tier A/B, brand: Tier A) and anything about price" in text
+    rules = test.dataframe[0].value
+    assert {"first_touch_tier", "high_risk_action", "kill_switch"} <= set(rules["Rule"])
+
+
+def test_trace_shows_each_tool_call_and_the_rule_behind_it(isolated_state):
+    world_until(isolated_state, at(1, 10), approve=False)
+    test = page("trace")
+    text = texts(test)
+
+    assert not test.exception
+    assert test.selectbox[0].value == "lead:L-001"
+    assert "**Research agent** · Research BrightBite Burgers" in text
+    assert "rule `first_touch_tier`" in text
+    assert "The agent's instructions and task (what the model was given)" in [e.label for e in test.expander]
+
+
+def test_empty_trace_page_explains_itself():
+    test = page("trace")
+    assert not test.exception
+    assert test.info[0].value.startswith("No trace yet")
+
+
+# --- Every page, empty and after the whole story --------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["today", "inbox", "pipeline", "deal", "team", "trace"])
 def test_every_page_renders_with_no_data(name):
     assert not page(name).exception
 
 
-def test_pages_show_the_finished_story(isolated_state):
-    full_story(isolated_state)
-
-    pipeline = page("pipeline")
-    assert not pipeline.exception
-    assert "**BrightBite Burgers**" in texts(pipeline)
-
-    deal = page("deal")
-    assert not deal.exception
-    assert deal.title[0].value == "BrightBite Burgers"
-    assert "Why this tier" in [h.value for h in deal.subheader]
-
-    approvals = page("approvals")
-    assert "Decision history" in [h.value for h in approvals.subheader]
-    assert approvals.success[0].value.startswith("Nothing waiting")
+def test_every_page_renders_after_the_whole_story(isolated_state):
+    world_until(isolated_state, at(13, 0))
+    for name in ("today", "inbox", "pipeline", "deal", "team", "trace"):
+        test = page(name)
+        assert not test.exception, name
 
 
-def test_story_is_complete_after_a_full_run(isolated_state):
-    full_story(isolated_state)
-    assert button(page("demo"), "Story complete").disabled
+def test_the_deal_page_shows_research_meeting_and_call_brief(isolated_state):
+    world_until(isolated_state, at(13, 0))
+    test = page("deal")
+    text = texts(test)
+
+    assert test.title[0].value == "BrightBite Burgers"
+    assert "**Why now** (research agent): 60 new franchise locations" in text
+    assert "Meeting with BrightBite Burgers booked for Thu 08 Oct 15:00 UTC" in text
+    assert any("Call brief: BrightBite Burgers" in m.value for m in test.markdown)
 
 
-def test_rejecting_the_io_skips_the_signature_step_instead_of_getting_stuck(isolated_state):
-    answers = iter(["y", "n"] + ["y"] * 10)  # approve the email, reject the IO
-    run(state_dir=isolated_state, ask=lambda prompt: next(answers), out=lambda line: None)
-    assert button(page("demo"), "Story complete").disabled
+# --- Sidebar ---------------------------------------------------------------------------------------
 
 
-def test_rejecting_from_the_approvals_page(isolated_state):
-    at = page("demo")
-    button(at, "Next: New lead: BrightBite").click().run()
+def test_choosing_claude_in_the_sidebar_sets_the_world_model(isolated_state):
+    world_until(isolated_state, at(1, 8, 45))
+    test = app()
+    model = next(control for control in test.sidebar.segmented_control if control.label == "Model")
+    model.set_value("claude").run()  # the user clicks "claude"
 
-    queue = page("approvals")
-    button(queue, "Reject").click().run()
-    assert not queue.exception
-    system = build_system(make_llm("scripted"), state_dir=isolated_state)
-    assert system.approvals.pending() == []
-    assert system.approvals.all()[0].status.value == "rejected"
+    assert World(isolated_state).read().model == "claude"
+    assert test.session_state["saved_llm_mode"] == "claude"
 
 
-def test_the_whole_live_demo_can_be_clicked_through(isolated_state):
-    """Press Next and Approve until the story is complete, like the live demo."""
-    at = page("demo")
-    for _ in range(40):
-        approve = [b for b in at.button if b.label == "Approve"]
-        if approve:
-            approve[0].click().run()
-            continue
-        nxt = button(at, "Next:") if any(b.label.startswith("Next:") for b in at.button) else None
-        if nxt is None:
-            break
-        nxt.click().run()
-        assert not at.exception
+def test_a_new_browser_session_shows_the_model_the_world_runs(isolated_state):
+    """Found in use: claude chosen earlier, a new tab showed "scripted" while the world kept calling Claude."""
+    Desk(isolated_state).start(model="claude")
+    test = app()
 
-    assert button(at, "Story complete").disabled
-    system = build_system(make_llm("scripted"), state_dir=isolated_state)
-    stages = {deal.id: deal.stage.value for deal in system.crm.deals()}
-    assert stages == {"D-001": "handoff", "D-002": "replied", "D-003": "scored"}
-    assert "event_duplicate" in [event.event for event in system.audit.events()]  # Maya's webhook, sent twice
+    assert test.session_state["llm_mode"] == "claude"
+    assert any("Live Claude" in item.value for item in test.sidebar.markdown)
 
 
-def test_reset_asks_first_then_clears_and_confirms(isolated_state):
-    full_story(isolated_state)
-    at = page("demo")
-    assert not any(b.label == "Yes, reset" for b in at.button)  # nothing to confirm until asked
-
-    button(at, "Reset demo").click().run()
-    button(at, "Yes, reset").click().run()
-
-    assert not at.exception
-    assert build_system(make_llm("scripted"), state_dir=isolated_state).crm.deals() == []
-    assert at.toast[0].value.startswith("Demo reset")
-    assert not any(b.label == "Yes, reset" for b in at.button)  # the dialog closed
-
-
-def test_cancelling_the_reset_keeps_everything(isolated_state):
-    full_story(isolated_state)
-    at = page("demo")
-    button(at, "Reset demo").click().run()
-    button(at, "Cancel").click().run()
-
-    assert len(build_system(make_llm("scripted"), state_dir=isolated_state).crm.deals()) == 3
-
-
-def test_run_now_button_sends_an_approved_but_blocked_email(isolated_state):
-    system = build_system(make_llm("scripted"), state_dir=isolated_state)
-    system.orchestrator.handle(story.lead_event(system.crm.get_lead("L-001")))
-    system.kill_switch.engage("investigating")
-    system.orchestrator.handle(story.approval_event("send_email:D-001:first_touch", True, "you@cool.example"))
-    system.kill_switch.release()
-
-    queue = page("approvals")
-    assert "Approved, not executed yet" in [h.value for h in queue.subheader]
-    button(queue, "Run now").click().run()
-
-    assert not queue.exception
-    assert system.crm.get_deal("D-001").stage.value == "outreach"
-
-
-def test_demo_page_explains_a_paused_system(isolated_state):
-    build_system(make_llm("scripted"), state_dir=isolated_state).orchestrator.pause("Bad emails", by="ops")
-    at = page("demo")
-    assert any("Kill switch is ON: new events are held" in e.value for e in at.error)
-
-
-def test_reject_and_redraft_from_the_ui_with_a_lesson(isolated_state):
-    at = page("demo")
-    button(at, "Next: New lead: BrightBite").click().run()
-
-    feedback = next(box for box in at.text_input if box.label == "Feedback for a redraft")
-    feedback.input("Lead with the operational pain, not congratulations").run()
-    at.checkbox[0].check().run()
-    button(at, "Reject & redraft").click().run()
-
-    assert not at.exception
-    system = build_system(make_llm("scripted"), state_dir=isolated_state)
-    assert [r.id for r in system.approvals.pending()] == ["send_email:D-001:first_touch:v2"]
-    assert system.lessons.all()[0].source == "review"
-    assert any("(draft v2, after review)" in m.value for m in at.markdown)
-
-
-def test_deal_page_shows_the_call_brief(isolated_state):
-    full_story(isolated_state)
-    deal = page("deal")
-    assert not deal.exception
-    assert any("Call brief: BrightBite Burgers" in m.value for m in deal.markdown)
-
-
-def test_call_brief_is_visible_in_the_log_with_a_shortcut_to_the_deal():
-    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
-    button(at, "Next: New lead: BrightBite").click().run()
-    button(at, "Approve").click().run()
-    button(at, "Next: Reply R-000").click().run()  # Maya's question
-    button(at, "Approve").click().run()  # our answer
-    button(at, "Next: Reply R-001").click().run()  # her meeting request
-
-    assert not at.exception
-    assert "View call brief" in [e.label for e in at.expander]
-    assert any("Questions to ask" in m.value for m in at.markdown)
-
-    button(at, "Open deal").click().run()
-    assert not at.exception
-    assert at.session_state["selected_deal"] == "D-001"
-
-
-def test_choosing_claude_in_the_sidebar_sticks():
-    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
-    at.session_state["llm_mode"] = "claude"  # the user clicks "claude"
-    at.run()
-    assert at.session_state["llm_mode"] == "claude"
-    assert at.session_state["saved_llm_mode"] == "claude"
+def test_sidebar_shows_paused_agents(isolated_state):
+    world_until(isolated_state, at(1, 8, 45)).system().kill_switch.engage("Bad emails")
+    test = app()
+    assert any("Agents paused: Bad emails" in e.value for e in test.sidebar.error)
 
 
 def test_sidebar_choices_come_back_if_streamlit_drops_them(monkeypatch):
@@ -235,135 +273,3 @@ def test_sidebar_choices_come_back_if_streamlit_drops_them(monkeypatch):
     assert state["llm_mode"] == "claude"  # restored from the saved copy
     assert state["segment"] == "brand"  # kept: the user just chose it
     assert state["reviewer"] == "you@cool.example"  # first visit: default
-
-
-def test_agent_trace_page_shows_an_event_step_by_step(isolated_state):
-    full_story(isolated_state)
-    at = page("trace")
-    assert not at.exception
-    assert at.title[0].value == "Agent trace"
-    options = at.selectbox[0].options
-    assert any(option.startswith("lead:L-001 · ") for option in options)
-    assert any(option.startswith("reply:R-001 · ") and "1 model call(s)" in option for option in options)
-
-    at.selectbox[0].select(next(o for o in options if o.startswith("reply:R-001"))).run()
-    assert any("Reply triage agent" in m.value for m in at.markdown)
-    assert "Prompt sent to the model" in [e.label for e in at.expander]
-
-
-def test_trace_button_opens_the_trace_for_a_step(isolated_state):
-    at = page("demo")
-    button(at, "Next: New lead: BrightBite").click().run()
-    button(at, "Agent trace").click().run()
-    assert not at.exception
-    assert any("Research agent" in m.value for m in at.markdown)
-    assert any("needs_approval" in m.value for m in at.markdown)
-
-
-def test_empty_trace_page_explains_itself():
-    at = page("trace")
-    assert not at.exception
-    assert at.info[0].value.startswith("No trace yet")
-
-
-def test_demo_page_shows_agents_and_the_map_after_a_step():
-    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
-    button(at, "Next: New lead: BrightBite").click().run()
-
-    assert not at.exception
-    text = "\n".join(m.value for m in at.markdown)
-    assert "**Research agent** (code) · 420 locations" in text
-    assert "**Scoring agent** (code) · 97.0 · Tier A" in text
-    assert "Policy: needs approval" in text
-    assert "Who worked on the last step" in [h.value for h in at.subheader]
-    assert at.get("graphviz_chart")
-
-
-def test_trace_page_has_the_agent_team_scorecards(isolated_state):
-    full_story(isolated_state)
-    at = page("trace")
-    assert "The agent team" in [h.value for h in at.subheader]
-    text = "\n".join(m.value for m in at.markdown)
-    assert "**Reply triage**" in text and ":violet-badge[AI]" in text
-    captions = [c.value for c in at.caption]
-    assert "Last: 0.0 · Tier C" in captions  # the scoring agent's latest run: Pebble & Pine
-    assert "Hasn't run yet" not in captions  # every agent worked during the full story
-
-
-def test_conversation_tab_shows_the_thread_and_the_agents_notes(isolated_state):
-    full_story(isolated_state)
-    deal = page("deal")
-    assert not deal.exception
-    text = "\n".join(m.value for m in deal.markdown)
-    assert "**Daniel Reyes · Cool AI**" in text
-    assert "**Maya Thompson · BrightBite Burgers**" in text
-    assert "I'd like our CFO, Ken, to join for the second half." in text  # her full reply, as written
-    captions = "\n".join(c.value for c in deal.caption)
-    assert "Reply triage: **meeting_request**" in captions
-    assert "approved by demo-reviewer@cool.example" in captions
-
-
-def test_conversation_shows_a_draft_waiting_for_approval(isolated_state):
-    at = page("demo")
-    button(at, "Next: New lead: BrightBite").click().run()
-    deal = page("deal")
-    assert any("Draft waiting for approval" in m.value for m in deal.markdown)
-
-
-def test_editing_an_email_in_the_ui_sends_the_edited_version(isolated_state):
-    at = page("demo")
-    button(at, "Next: New lead: BrightBite").click().run()
-
-    email = next(box for box in at.text_area if box.label == "Email")
-    email.input(email.value.replace("Would you be open to", "Could we find time for")).run()
-    button(at, "Approve with edits").click().run()
-
-    assert not at.exception
-    system = build_system(make_llm("scripted"), state_dir=isolated_state)
-    [sent] = system.crm.messages("D-001")
-    assert "Could we find time for" in sent.body
-    assert system.approvals.get("send_email:D-001:first_touch").original_action is not None
-
-    deal = page("deal")
-    assert not deal.exception
-    assert "edited by" in texts(deal)
-    assert "Show the agent's original draft" in [e.label for e in deal.expander]
-
-
-def test_deal_page_shows_the_call_transcript_and_what_was_learned(isolated_state):
-    full_story(isolated_state)
-    deal = page("deal")
-
-    assert not deal.exception
-    assert "Call" in [tab.label for tab in deal.tabs]
-    transcripts = "\n".join(t.value for t in deal.text)
-    assert "Can we do a second call with him?" in transcripts  # the intro call
-    assert "Final sign-off is mine" in transcripts  # the call with the CFO
-    assert ["Call 1: L-001_intro_call", "Call 2: L-001_discovery_call"] == [h.value for h in deal.subheader if h.value.startswith("Call ")]
-    assert "all segments" in texts(deal)  # a global lesson from the call
-
-
-def test_io_tab_shows_where_the_document_is_and_offers_a_download(isolated_state):
-    full_story(isolated_state)
-    deal = page("deal")
-
-    assert not deal.exception
-    assert any(c.value.startswith("Signed by Ken Adeyemi") and "envelope ENV-IO-D-001" in c.value for c in deal.caption)
-    assert "Download IO-D-001" in [element.proto.label for element in deal.get("download_button")]
-
-
-def test_changing_terms_in_the_ui_redrafts_the_io(isolated_state):
-    at = page("demo")
-    for step in ("Next: New lead: BrightBite", "Approve", "Next: Reply R-000", "Approve", "Next: Reply R-001",
-                 "Next: Call transcript ready (Fireflies): L-001_intro", "Next: Call transcript ready (Fireflies): L-001_disc"):
-        button(at, step).click().run()
-
-    payment = next(box for box in at.text_input if box.label == "Payment terms")
-    payment.input("Net 45")  # inside a form: the value is submitted with the button click
-    button(at, "Save terms and redraft the IO").click().run()
-
-    assert not at.exception
-    system = build_system(make_llm("scripted"), state_dir=isolated_state)
-    assert [r.id for r in system.approvals.pending()] == ["send_io:D-001:IO-D-001-v2"]
-    deal = page("deal")
-    assert any("payment terms Net 30 → Net 45" in m.value for m in deal.markdown)

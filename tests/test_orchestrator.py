@@ -4,10 +4,12 @@ import re
 
 import pytest
 
+from revenue_agents.demo_llm import demo_llm
 from revenue_agents.events import Event, EventType
 from revenue_agents.llm import FakeLLM, LLMError
 from revenue_agents.models import Stage, Tier
 from revenue_agents.stages import is_forward, missing_for
+from revenue_agents.runtime import ScriptedRuntime
 from revenue_agents.system import build_system
 from tests.scripted import BRIGHTBITE_CALL, MAYA_MEETING, SAM_OBJECTION
 
@@ -31,13 +33,13 @@ def reply_answer(call):
 
 @pytest.fixture
 def llm():
-    return FakeLLM({"OutreachDraft": outreach_answer, "ReplyClassification": reply_answer,
+    return FakeLLM({**demo_llm().responses, "OutreachDraft": outreach_answer, "ReplyClassification": reply_answer,
                     "CallDigest": BRIGHTBITE_CALL})
 
 
 @pytest.fixture
 def system(tmp_path, llm):
-    return build_system(llm, state_dir=tmp_path)
+    return build_system(ScriptedRuntime(llm), state_dir=tmp_path)
 
 
 def lead_created(lead_id):
@@ -131,7 +133,7 @@ def test_failed_event_can_be_retried(tmp_path, llm):
             raise LLMError("model timed out")
         return outreach_answer(call)
 
-    system = build_system(FakeLLM({**llm.responses, "OutreachDraft": flaky}), state_dir=tmp_path)
+    system = build_system(ScriptedRuntime(FakeLLM({**llm.responses, "OutreachDraft": flaky})), state_dir=tmp_path)
     with pytest.raises(LLMError):
         system.orchestrator.handle(lead_created("L-002"))
 
@@ -141,7 +143,7 @@ def test_failed_event_can_be_retried(tmp_path, llm):
 
 def test_rejected_draft_flags_the_deal(tmp_path, llm):
     bad = {"opening": "We guarantee results.", "value_prop_index": 0}
-    system = build_system(FakeLLM({**llm.responses, "OutreachDraft": bad}), state_dir=tmp_path)
+    system = build_system(ScriptedRuntime(FakeLLM({**llm.responses, "OutreachDraft": bad})), state_dir=tmp_path)
     system.orchestrator.handle(lead_created("L-002"))
 
     deal = system.crm.get_deal("D-002")
@@ -164,32 +166,40 @@ def test_kill_switch_holds_a_new_lead_until_release(system):
 
 def test_kill_switch_pulled_mid_event_is_replayed_on_release(system):
     """An operator hits the kill switch while a lead is being processed: it stops, then finishes on release."""
-    research = system.orchestrator._agents.research
-    original_run = research.run
+    host = system.orchestrator._agents.host
+    original_run = host.run
 
-    def run_then_kill(lead, deal):
-        result = original_run(lead, deal)
-        system.kill_switch.engage("Stop now")  # pulled right after enrichment was proposed
-        return result
+    def run_and_kill(task, on_result=None):
+        def kill_after_first(action, result):
+            on_result(action, result)
+            system.kill_switch.engage("Stop now")  # pulled right after the enrichment ran
 
-    research.run = run_then_kill
+        return original_run(task, kill_after_first)
+
+    host.run = run_and_kill
     report = system.orchestrator.handle(lead_created("L-002"))
 
     assert report.status == "held"
     assert "Kill switch pulled during processing" in report.steps[-1]
-    assert stage(system, "D-002") is Stage.PROSPECT
+    assert stage(system, "D-002") is Stage.ENRICHED  # scoring was refused: nothing ran after the switch
 
-    research.run = original_run
+    host.run = original_run
     system.orchestrator.resume(by="ops@cool.example")
     assert stage(system, "D-002") is Stage.OUTREACH
     assert len(emails(system, "D-002")) == 1
 
 
 def test_lead_stops_if_its_score_does_not_land(system):
-    """Defensive stop: if the score action doesn't execute, no email is drafted for an unscored lead."""
-    from revenue_agents.agents.base import AgentResult
+    """Defensive stop: if the score never lands (here the tool is missing), no email is drafted for an unscored lead."""
+    research = system.orchestrator._agents.research
+    original = research.task
 
-    system.orchestrator._agents.scoring.run = lambda lead, deal, enrichment: AgentResult(output=None, actions=[])
+    def without_scoring(lead, deal):
+        task = original(lead, deal)
+        task.tools = [tool for tool in task.tools if tool.name != "score_lead"]
+        return task
+
+    research.task = without_scoring
     report = system.orchestrator.handle(lead_created("L-001"))
 
     assert report.steps[-1] == "Stopped: lead could not be scored"
@@ -221,7 +231,7 @@ def test_injection_reply_is_flagged_and_teaches_nothing(system, replies):
 
 
 def test_unsubscribe_closes_the_deal(tmp_path, llm, replies):
-    system = build_system(FakeLLM({**llm.responses, "ReplyClassification": UNSUBSCRIBE}), state_dir=tmp_path)
+    system = build_system(ScriptedRuntime(FakeLLM({**llm.responses, "ReplyClassification": UNSUBSCRIBE})), state_dir=tmp_path)
     system.orchestrator.handle(lead_created("L-002"))
     system.orchestrator.handle(reply(replies, "R-003"))
     assert stage(system, "D-002") is Stage.CLOSED_LOST
@@ -249,7 +259,7 @@ def test_call_qualifies_the_deal_and_drafts_the_io(system, replies, transcript):
 
 def test_incomplete_call_does_not_qualify(tmp_path, llm, transcript):
     partial = {"deal_fields": {"next_step": "Follow up"}, "lessons": []}
-    system = build_system(FakeLLM({**llm.responses, "CallDigest": partial}), state_dir=tmp_path)
+    system = build_system(ScriptedRuntime(FakeLLM({**llm.responses, "CallDigest": partial})), state_dir=tmp_path)
     system.orchestrator.handle(lead_created("L-001"))
     report = system.orchestrator.handle(call(transcript))
 
@@ -268,7 +278,7 @@ def test_second_call_with_the_same_terms_does_not_redraft(system, replies, trans
 
 def test_blocked_io_flags_the_deal(tmp_path, llm, transcript):
     no_terms = {**BRIGHTBITE_CALL, "deal_fields": {**BRIGHTBITE_CALL["deal_fields"], "payment_terms": None}}
-    system = build_system(FakeLLM({**llm.responses, "CallDigest": no_terms}), state_dir=tmp_path)
+    system = build_system(ScriptedRuntime(FakeLLM({**llm.responses, "CallDigest": no_terms})), state_dir=tmp_path)
     system.orchestrator.handle(lead_created("L-001"))
     system.orchestrator.handle(call(transcript))
 
@@ -328,7 +338,7 @@ def test_reply_from_a_lead_we_never_emailed_is_flagged_not_progressed(system, re
 
 
 def test_unsubscribe_is_honoured_even_without_outreach(tmp_path, llm, replies):
-    system = build_system(FakeLLM({**llm.responses, "ReplyClassification": UNSUBSCRIBE}), state_dir=tmp_path)
+    system = build_system(ScriptedRuntime(FakeLLM({**llm.responses, "ReplyClassification": UNSUBSCRIBE})), state_dir=tmp_path)
     system.orchestrator.handle(lead_created("L-001"))
     system.orchestrator.handle(reply(replies, "R-001"))
     assert stage(system) is Stage.CLOSED_LOST

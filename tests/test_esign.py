@@ -6,12 +6,13 @@ from revenue_agents.demo_llm import demo_llm
 from revenue_agents.esign import EnvelopeStatus, MockESign
 from revenue_agents.events import Event, EventType
 from revenue_agents.models import Stage
+from revenue_agents.runtime import ScriptedRuntime
 from revenue_agents.system import build_system
 
 
 @pytest.fixture
 def system(tmp_path):
-    return build_system(demo_llm(), state_dir=tmp_path)
+    return build_system(ScriptedRuntime(demo_llm()), state_dir=tmp_path)
 
 
 def event(type_, event_id, **payload):

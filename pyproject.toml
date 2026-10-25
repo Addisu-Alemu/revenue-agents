@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Agentic revenue system for Cool AI: agents that run the sales lifecycle from prospect to signed IO."
 requires-python = ">=3.10"
 dependencies = [
-    "claude-agent-sdk",
+    "claude-agent-sdk==0.2.168",  # the PreToolUse hook contract (allow / defer / deny)
     "pyyaml",
     "pydantic>=2",
     "python-dotenv",

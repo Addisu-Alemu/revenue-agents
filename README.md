@@ -1,10 +1,30 @@
 # Revenue Agents
 
-An agentic revenue system for Cool AI: single-purpose AI agents, coordinated by an orchestrator, that move a lead from **prospect → enrich → score → outreach → reply → meeting → qualify → proposal / IO → signature → handoff**. Risky steps wait for a human, and that rule is enforced in code. Built on the Claude Agent SDK, with HubSpot mocked as the system of record.
+An agentic revenue system for Cool AI. **The agents run the desk; you run the agents.** AI agents work a live, simulated world: leads arrive on their own, prospects reply to what the agents actually wrote, calls and signatures happen when they would. Each agent works in a loop with its own small set of tools and decides which to call; every call passes a hook that asks the autonomy policy, written in code, whether it runs on its own, waits for you, or is refused. You only see what the rules send you, and you can coach, approve, reject or pause everything. Built on the Claude Agent SDK, with HubSpot, the inbox, the calendar and e-signature mocked.
 
-Design document: https://claude.ai/artifact/NN3rv38qkcyhZjwnuUUYDf
+Design document: https://claude.ai/artifact/NN3rv38qkcyhZjwnuUUYDf · the October redesign and its decisions: [docs/DESIGN.md](docs/DESIGN.md) · reviewing this change: [docs/REVIEW_GUIDE.md](docs/REVIEW_GUIDE.md)
 
-> **Status: complete vertical slice.** Seven agents (research, scoring, outreach, reply triage, call brief, call intel, deal desk) coordinated by an orchestrator, with the autonomy policy, action gateway, approval queue, audit log, kill switch, stage tracking, daily digest and e-signature through to handoff. Two segments: brands, and agencies added through `segments/agency.yaml` alone. Runs in the terminal or in a browser UI, with real Claude or with scripted answers.
+> **Status.** Four AI agents with tools (research, outreach, reply, call intel), three code skills on purpose (scoring, call brief, deal desk: tiers and contracts must be exact), the autonomy policy as a PreToolUse hook in front of the action gateway, the approval inbox, audit log and kill switch, stage tracking, the daily digest and e-signature through to handoff. A live world with a clock, a scheduler and a buyer simulator. Two segments, agencies added through `segments/agency.yaml` alone. Runs in the browser, in the terminal, or headless, with real Claude or with scripted decisions.
+
+## How it works
+
+```
+the world (world.py)            leads arrive · buyers react (simulator.py) · SLA check 08:00, digest 18:00 · follow-up timers
+      |                          your decisions go in the same queue, and are delivered first
+      v
+orchestrator                    owns deal state and stages; gives each event to the right agent; contracts, signatures,
+      |                          unsubscribes and IO versions stay in code
+      v
+agent (runtime.py)              the model picks a tool -> PreToolUse hook -> policy (guardrails/policy.py)
+      |                              allow: the tool runs; a side effect goes through the gateway (claims, audit)
+      |                              defer: the run stops; the call waits in your inbox
+      |                              deny:  the reason goes back to the model, which can try something else
+      v
+gateway -> handlers -> mock HubSpot / outbox / calendar / e-sign
+```
+
+- **Real Claude** (`claude`): each agent is a Claude Agent SDK run. Its tools are an in-process MCP server; no built-in tools (no files, shell or web), no personal settings, only that agent's tools allowed (`dontAsk`), a turn limit and a spend cap per run.
+- **Scripted decisions** (`scripted`, the default): the same agents, tools, hook, policy and gateway; only the decisions (what to write, how to read a reply, when to meet) come from pre-written answers for the mock data. No API key needed. The UI always says which mode is on.
 
 ## Quick start with Docker (any OS: Windows, macOS, Linux)
 
@@ -53,32 +73,43 @@ ANTHROPIC_API_KEY=sk-ant-...
 - Only the entry-point scripts load `.env`. Tests never do, so the test suite can't call the real API.
 - The code refuses to call Claude without `ANTHROPIC_API_KEY`. It never falls back to whatever Claude Code account is logged in on the machine.
 
-Check the connection (one tiny request, costs a fraction of a cent):
+Check the connection (one tiny request, costs a fraction of a cent), and that Claude really drives the tools (one research and one outreach run, capped at $1; it prints every tool call with the hook's verdict, and checks that the Tier A email stopped for a human):
 
 ```bash
 python scripts/check_claude.py
+python scripts/check_claude.py --agent
 ```
 
-## Run the demo
+## Run it
 
-```bash
-python run_demo.py --llm claude     # real Claude (needs ANTHROPIC_API_KEY with credit in .env)
-python run_demo.py                  # scripted model answers, no API key needed
-python run_demo.py --auto-approve   # don't pause at approvals
-python run_demo.py --segment agency # the agency segment (added with config only)
-```
-
-The demo runs the brand segment's mock data through the real system: a new lead is enriched, scored and tiered; the Tier A first email **pauses for your approval**; Maya replies with a question first (can corporate control what franchisees change?), the outreach agent drafts an answer that **pauses for approval** too, and her next reply asks for a meeting, so the deal moves to Meeting and a **call brief** is prepared for the rep (a duplicate webhook is ignored); an intro call leaves budget and dates open, so the rep gets an **updated call brief**, and the call with the CFO fills them in; the calls produce lessons, some for the brand segment and some **global** for every segment; the IO is drafted and **pauses for approval** and goes out for e-signature; Maya then emails that Ken wants Net 45, so the agents draft **IO v2** for your approval (approving sends it and voids the first IO, so only the new one can be signed); a forged "signed" webhook is rejected and the real one closes the deal (handoff); the next brand lead's email **applies a lesson** from the call; Owen's prompt-injection reply is flagged; and six days later the SLA check flags a stalled deal and the daily digest prints. It ends with the pipeline, the knowledge loop and the audit log size. The whole conversation with Maya is stored as one email thread.
-
-Without `--llm claude`, model answers are scripted for the mock data (and the demo says so); everything else is the real code path. `--llm claude` never falls back to scripted answers: if the key is missing or has no credit, it stops with an error. Demo state is written to `state/demo/` and reset on each run (`--keep-state` to keep it).
-
-## UI
+### In the browser (the live world)
 
 ```bash
 streamlit run app.py
 ```
 
-Opens in the browser (http://localhost:8501). The **Live demo** page runs the same story one step at a time: each agent appears **live as it works** (with its result, model time and cost), an **agent map** lights up the agents, policy and stores that worked on the last step, and approvals are decided inline (an email can be **edited before approving**: your version is sent, the agent's draft is kept, and the edit is audited); **Agent trace** shows **scorecards for the agent team** (runs, model calls, time, cost, latest result) and, for any event, each agent's input, the exact prompt sent to the model, its raw answer, what was proposed and what the policy decided; **Pipeline**, **Deal detail** (including the email **Conversation**, both ways, and the **Call**: its transcript and what the agent took from it; the **Insertion order** tab lists every IO version with its status and what changed, offers a download, and lets the rep **change the terms**, which redrafts the IO, replaces a pending version and voids a sent one so it can't be signed) and **Approvals** show the state. It shares `state/demo/` with `run_demo.py`, and every button sends an event to the orchestrator, so the policy and gateway apply exactly as in the terminal.
+Open http://localhost:8501 and press **Start**. The clock starts on Thursday 1 October; play, pause, speed it up (15 min, 1 h or 4 h of world time per second), or jump to the next arrival.
+
+- **Today**: what needs you, who is working right now (each tool call appears as the agent makes it), what happened (every arrival with the agent runs it started and their tool calls), what's coming up (the scheduler and the timers agents set), and the pipeline. **Pause all agents** is the kill switch: events keep arriving and wait in order; nothing reaches a customer or the CRM until you release them.
+- **Inbox**: only what the rules sent you, why it stopped (the rule), the draft (edit it before approving if you like), **Redraft** with your note (and keep it as a lesson for every later email), and what the agent did and used to get there.
+- **Team**: the agents, each tool and its permission, the rules table and the audit log. All of it is generated from the code.
+- **Pipeline**, **Deal detail** (the conversation, research note, meeting, call brief, the call, IO versions) and **Agent trace** (any event, step by step: each agent's tool calls in order, the rule behind each, what the gateway executed, how the deal moved).
+
+One background runner delivers the world for the state folder (`state/demo`, shared with the terminal tools). Your decisions go through the same queue, so you and the agents never act on the same deal at once.
+
+### In the terminal
+
+```bash
+python run_demo.py                  # the world at full speed; asks you at each approval
+python run_demo.py --auto-approve   # approve everything
+python run_demo.py --segment agency # show only one segment's deals
+python run_demo.py --llm claude     # real Claude picks the tools (needs ANTHROPIC_API_KEY with credit in .env)
+python run_world.py                 # the world in real time (1 h per second), printing what arrives; approve in the UI
+```
+
+What to watch for, in order: BrightBite's Tier A first email waits for you; Maya asks a question first, and the reply agent drafts an answer that waits too (an answer to a top-tier lead); her next reply asks for a call, so the reply agent **books the meeting** on its own and the deal moves to Meeting with a call brief (her email provider delivers that webhook twice: handled once); the intro call leaves budget and dates open, so the brief is updated for the second call; the call with the CFO fills them in, lessons are learned, and the IO waits for you; Maya asks for Net 45, so the deal desk drafts **IO v2** for your approval (approving voids v1, so only the new one can be signed); a forged "signed" webhook is rejected and Ken's real signature closes the deal. Meanwhile Owen's reply carries a prompt injection (flagged, nothing learned, a **follow-up timer** set for after the holidays), Sam asks for a rate card (a human answers pricing), Lumen goes quiet and the SLA check flags it, and the two leads that arrive after the calls get emails that **apply what the calls taught**, one of them in the other segment (a global lesson).
+
+Scripted mode is announced as scripted. `--llm claude` never falls back to scripted answers: if the key is missing or has no credit, the run stops with an error, and in the UI the world pauses with the reason and retries when you press Play.
 
 ## Tests
 
@@ -87,48 +118,53 @@ pytest                                                  # all tests, offline and
 pytest --cov=revenue_agents --cov-report=term-missing   # with coverage
 ```
 
-Tests use `FakeLLM`, which gives scripted answers, so they need no API key or network and give the same result every run.
+Tests run the agents with the scripted runtime: the real tools, hook, policy, gateway and handlers, with pre-written decisions (`FakeLLM`). The Claude runtime is tested against a stand-in for the SDK's `query()` that calls the hook and the tools the way Claude Code does. No API key or network, and the same result every run. The world tests move the clock themselves (no background thread), and the UI tests use Streamlit's AppTest with the runner off.
 
 ## Project structure
 
 ```
 revenue_agents/
+  runtime.py         Agents as tool loops: Tool, the PreToolUse guard, ClaudeRuntime (Agent SDK), ScriptedRuntime
+  agents/            research, outreach, reply, call_intel (AI, with tools); call_brief, deal_desk (code skills)
+  orchestrator.py    Owns deal state; gives each event to the right agent; moves stages
+  world.py           The live world: clock, queue, scheduler, timers, the desk that delivers, the background runner
+  simulator.py       Buyer simulator (demo only): prospects react to what the agents did
+  team.py            The agent team and its rules as data, read from the code (for the Team page)
   models.py          Shared data models: Lead, Deal, LeadScore, Stage, Tier, ...
   segments.py        Loads and validates segment config packs
-  llm.py             LLM interface: ClaudeLLM (Agent SDK, locked down) and FakeLLM (tests)
-  crm.py             CRM interface + MockHubSpot (system of record: leads, deals, timeline)
+  llm.py             LLM interface: ClaudeLLM (structured answers, used by the buyer simulator) and FakeLLM
+  crm.py             CRM interface + MockHubSpot (system of record: leads, deals, timeline, conversation)
   lessons.py         Lesson store: knowledge loop memory, with usage tracking
   handlers.py        What executed actions actually do (the only side-effecting code)
-  agents/            research, scoring, outreach, reply_triage, call_brief, call_intel, deal_desk
-  orchestrator.py    Owns deal state; handles events; moves stages
   stages.py          Stage order and exit criteria
-  events.py          Event types (triggers)
-  system.py          Composition root: build_system() and make_llm()
+  events.py          Event types (triggers) and their builders
+  system.py          Composition root: build_system() and make_runtime()
   tracking.py        Stall detection, reminders, daily digest
   esign.py           E-signature interface + mock provider
-  demo.py            The live demo story; demo_llm.py holds the scripted model answers
-  storage.py         Atomic, locked file storage for runtime state
-  tracing.py         Agent trace: TracedAgent / TracingLLM wrappers record each step per event
-  ui/                Browser UI pages: live demo, agent trace, pipeline, deal detail, approvals
+  demo.py            The terminal demo (the world at full speed); demo_llm.py holds the scripted decisions
+  storage.py         Atomic, locked file storage for runtime state; the world clock
+  tracing.py         The agent trace: every run, tool call, policy decision, execution and stage change
+  ui/                Browser UI: today, inbox, pipeline, deal detail, team, agent trace
   skills/
     enrichment.py    Enricher interface + mock provider
     scoring.py       Fit / intent / engagement scoring with reasons, and tiers
   guardrails/
     policy.py        Autonomy policy: AUTO / NEEDS_APPROVAL / BLOCKED (plain Python)
-    gateway.py       The only path from an agent's proposal to a real side effect
+    gateway.py       The only path from a proposal to a real side effect
     approvals.py     Approval queue for high-risk actions
     audit.py         Append-only audit log
     claims.py        Atomic per-action claims (idempotency)
     untrusted.py     Wraps inbound content as data; detects prompt injection
     kill_switch.py   Emergency stop
 segments/            One YAML config pack per customer segment
-data/                Mock leads, enrichment, replies, call transcript, IO template
-run_demo.py          Entry point for the terminal demo
-app.py               Entry point for the browser UI (streamlit run app.py)
-scripts/             Other entry points (check_claude.py, kill_switch.py)
+data/                Mock leads, enrichment, replies, call transcripts, buyer personas, IO template
+run_demo.py          The terminal demo
+run_world.py         The live world in the foreground, in real time
+app.py               The browser UI (streamlit run app.py)
+scripts/             check_claude.py, kill_switch.py
 tests/
-docs/DESIGN.md       Link to the design document
-state/               Runtime state (approvals, audit log, claims). Git-ignored.
+docs/                DESIGN.md (decisions), REVIEW_GUIDE.md (how to review this change)
+state/               Runtime state (world, approvals, audit log, claims). Git-ignored.
 ```
 
 ## Adding a customer segment
@@ -147,4 +183,4 @@ python scripts/kill_switch.py off                                   # resume
 
 While it is on, **nothing executes and nothing is lost**: incoming events (new leads, replies, calls, signatures) are **held** in arrival order; human approval decisions are still recorded, but the approved actions wait; the daily digest still runs (it only reports). `off` replays held events in order, then runs approved actions that waited. Pause and resume are written to the audit log. Resetting the demo never turns the switch off.
 
-It defaults to the demo state (`state/demo/`); use `--state-dir` for another one. The switch itself is the file `KILL_SWITCH` in that folder, and the gateway checks it before every action as a second layer.
+It defaults to the demo state (`state/demo/`); use `--state-dir` for another one. The switch itself is the file `KILL_SWITCH` in that folder, and the gateway checks it before every action as a second layer. In the UI, **Pause all agents** on Today or Team does the same, and **Release** replays what waited.

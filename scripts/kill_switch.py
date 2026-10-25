@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from revenue_agents.demo import DEMO_STATE  # noqa: E402
-from revenue_agents.system import build_system, make_llm  # noqa: E402
+from revenue_agents.system import build_system, make_runtime  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     load_dotenv()
-    system = build_system(make_llm(args.llm), state_dir=Path(args.state_dir))
+    system = build_system(make_runtime(args.llm), state_dir=Path(args.state_dir))
     orchestrator = system.orchestrator
     if args.command == "on":
         lines = orchestrator.pause(args.reason, by=args.by)

@@ -3,17 +3,18 @@
 import pytest
 from claude_agent_sdk import ResultMessage
 
-from revenue_agents import story
 from revenue_agents.demo_llm import demo_llm
 from revenue_agents.llm import ClaudeLLM, FakeLLM, LLMError
 from revenue_agents.models import Model
+from revenue_agents.runtime import ScriptedRuntime
 from revenue_agents.system import build_system
 from revenue_agents.tracing import NullTracer, TracedAgent, Tracer, TracingLLM, describe
+from tests import story
 
 
 @pytest.fixture
 def system(tmp_path):
-    return build_system(demo_llm(), state_dir=tmp_path)
+    return build_system(ScriptedRuntime(demo_llm()), state_dir=tmp_path)
 
 
 def kinds(spans):
@@ -26,37 +27,45 @@ def test_a_new_lead_is_traced_step_by_step(system):
 
     assert {span.event_id for span in spans} == {"lead:L-001"}
     assert kinds(spans) == [
-        ("agent", "research"), ("policy", "enrich_lead"), ("action", "enrich_lead"), ("stage", "enriched"),
-        ("agent", "scoring"), ("policy", "score_lead"), ("action", "score_lead"), ("stage", "scored"),
-        ("llm", "OutreachDraft"), ("agent", "outreach"), ("policy", "send_email"),
+        ("run", "research"), ("tool", "read_lead"),
+        ("policy", "enrich_lead"), ("action", "enrich_lead"), ("tool", "enrich_company"),
+        ("policy", "score_lead"), ("action", "score_lead"), ("tool", "score_lead"),
+        ("policy", "record_research"), ("action", "record_research"), ("tool", "save_research_note"),
+        ("agent", "research"), ("stage", "enriched"), ("stage", "scored"),
+        ("run", "outreach"), ("tool", "read_account"), ("tool", "search_lessons"), ("tool", "draft_email"),
+        ("policy", "send_email"), ("tool", "send_email"), ("agent", "outreach"),
     ]
-    send = spans[-1].data
-    assert (send["decision"], send["rule"]) == ("needs_approval", "first_touch_tier")
+    send = next(span for span in spans if span.kind == "tool" and span.name == "send_email").data
+    assert (send["verdict"], send["rule"], send["outcome"]) == ("defer", "first_touch_tier", "queued")
 
 
-def test_model_calls_record_prompt_answer_and_model(system):
+def test_agent_runs_record_the_model_prompt_and_status(system):
     story.run(system, story.plan(system.crm.leads(), "brand")[0])
-    [call] = [span for span in system.tracer.spans() if span.kind == "llm"]
+    outreach = next(span for span in system.tracer.spans() if span.kind == "agent" and span.name == "outreach")
 
-    assert call.data["model"] == "scripted answers"
-    assert "Company: BrightBite Burgers" in call.data["prompt"]
-    assert "Don't start with a greeting" in call.data["system"]
-    assert call.data["answer"]["value_prop_index"] == 0
+    assert outreach.data["model"] == "scripted answers"
+    assert outreach.data["status"] == "waiting_for_approval"
+    assert outreach.data["tools"] == ["read_account", "search_lessons", "draft_email", "send_email"]
+    assert "Company: BrightBite Burgers" in outreach.data["prompt"]
+    assert "Don't start with a greeting" in outreach.data["system"]
+    assert "send it" in outreach.data["system"]
 
 
-def test_agent_steps_record_inputs_output_and_proposals(system):
+def test_tool_calls_record_input_verdict_and_result(system):
     story.run(system, story.plan(system.crm.leads(), "brand")[0])
-    research = next(span for span in system.tracer.spans() if span.name == "research")
+    tools = {span.name: span.data for span in system.tracer.spans() if span.kind == "tool"}
 
-    assert research.data["inputs"] == ["Lead L-001 (BrightBite Burgers)", "Deal D-001 (prospect)"]
-    assert research.data["output"]["locations"] == 420
-    assert research.data["proposed"] == ["enrich_lead (enrich_lead:D-001:enrich)"]
+    assert tools["enrich_company"]["action_id"] == "enrich_lead:D-001:enrich"
+    assert (tools["enrich_company"]["verdict"], tools["enrich_company"]["outcome"]) == ("allow", "executed")
+    assert "420 locations" in tools["enrich_company"]["result"]
+    assert tools["draft_email"]["input"]["value_prop_index"] == 0
+    assert tools["read_lead"]["rule"] == "read_only"
 
 
 def test_stage_that_does_not_move_is_explained(tmp_path):
     partial = {"deal_fields": {"next_step": "Follow up"}, "lessons": []}
     llm = demo_llm()
-    system = build_system(FakeLLM({**llm.responses, "CallDigest": partial}), state_dir=tmp_path)
+    system = build_system(ScriptedRuntime(FakeLLM({**llm.responses, "CallDigest": partial})), state_dir=tmp_path)
     system.orchestrator.handle(story.lead_event(system.crm.get_lead("L-001")))
     system.orchestrator.handle(story.call_event(system.crm.get_lead("L-001"),
                                                 story.load_transcripts()["L-001"][0]))

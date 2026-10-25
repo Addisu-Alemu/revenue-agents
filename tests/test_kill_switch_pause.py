@@ -2,20 +2,23 @@
 
 import pytest
 
-from revenue_agents import story
 from revenue_agents.demo_llm import demo_llm
 from revenue_agents.events import Event, EventType
 from revenue_agents.guardrails.policy import ActionType
+from revenue_agents.llm import LLMError
 from revenue_agents.models import Stage
+from revenue_agents.runtime import ScriptedRuntime
+from revenue_agents.storage import utc_now
 from revenue_agents.system import build_system, reset_state
 from scripts import kill_switch as kill_switch_cli
+from tests import story
 
 OPS = "ops@cool.example"
 
 
 @pytest.fixture
 def system(tmp_path):
-    return build_system(demo_llm(), state_dir=tmp_path)
+    return build_system(ScriptedRuntime(demo_llm()), state_dir=tmp_path)
 
 
 def lead(lead_id):
@@ -78,6 +81,60 @@ def test_digest_still_works_while_paused_and_shows_what_waits(system, transcript
     assert report.status == "processed"
     assert "  - Send IO-D-001 ($250,000) to BrightBite Burgers (use Run now)" in report.steps
     assert "  - lead.created (lead:L-002)" in report.steps
+
+
+def test_one_bad_held_event_does_not_block_the_rest(system):
+    """Found in review: an event for an unknown lead raised on replay, and every later resume stuck at it."""
+    system.orchestrator.pause("Investigating", by=OPS)
+    for lead_id in ("L-999", "L-002"):
+        system.orchestrator.handle(lead(lead_id))
+
+    steps = system.orchestrator.resume(by=OPS)
+
+    assert any(step.startswith("lead.created lead:L-999: failed (KeyError") for step in steps)
+    assert system.crm.get_deal("D-002").stage is Stage.OUTREACH  # the good event behind it still ran
+    assert system.orchestrator.held_events() == []
+    assert not system.kill_switch.is_engaged()
+    digest = system.orchestrator._tracker.digest(utc_now())
+    assert digest.failed_events == ["lead.created (lead:L-999)"]
+    assert "Failed on replay (1):" in digest.render()
+
+
+def test_a_model_failure_on_replay_keeps_the_order_and_pauses_again(system, monkeypatch):
+    system.orchestrator.pause("Investigating", by=OPS)
+    for lead_id in ("L-002", "L-003"):
+        system.orchestrator.handle(lead(lead_id))
+
+    def model_down(task, on_result=None):
+        raise LLMError("The model call failed: overloaded")
+
+    monkeypatch.setattr(system.orchestrator._agents.host, "run", model_down)
+    steps = system.orchestrator.resume(by=OPS)
+
+    assert system.kill_switch.is_engaged()
+    assert "Replay stopped at lead:L-002" in system.kill_switch.reason()
+    assert [event.id for event in system.orchestrator.held_events()] == ["lead:L-002", "lead:L-003"]
+    assert steps[-1].startswith("Kill switch ON: Replay stopped at lead:L-002")
+
+
+def test_a_rejection_with_a_note_while_paused_redrafts_on_release(system):
+    """Found in review: the redraft and the lesson were blocked by the gateway and lost."""
+    system.orchestrator.handle(lead("L-001"))
+    asked = len(system.runtime.answers.calls)
+    system.orchestrator.pause("Investigating", by=OPS)
+
+    report = system.orchestrator.handle(story.approval_event(
+        "send_email:D-001:first_touch", False, OPS, "Mention their Q1 menu launch", save_lesson=True))
+
+    assert system.approvals.get("send_email:D-001:first_touch").status.value == "rejected"  # the decision stands
+    assert "Agents paused: approval.decided held until release, nothing lost" in report.steps
+    assert system.approvals.pending() == [] and system.lessons.all() == []
+    assert len(system.runtime.answers.calls) == asked  # no model call while paused
+
+    system.orchestrator.resume(by=OPS)
+
+    assert [r.id for r in system.approvals.pending()] == ["send_email:D-001:first_touch:v2"]
+    assert [lesson.source for lesson in system.lessons.all()] == ["review"]
 
 
 # --- Approvals that couldn't run (the "orphan" bug) --------------------------------------

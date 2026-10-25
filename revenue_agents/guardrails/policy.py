@@ -24,9 +24,12 @@ class ActionType(str, Enum):
     SCORE_LEAD = "score_lead"
     UPDATE_DEAL = "update_deal"
     FLAG_DEAL = "flag_deal"
+    RECORD_RESEARCH = "record_research"  # the research agent's "why now" note
     CLASSIFY_REPLY = "classify_reply"
     RECORD_LESSON = "record_lesson"
     SEND_EMAIL = "send_email"
+    BOOK_MEETING = "book_meeting"  # a slot the prospect asked for, on the rep's calendar (mock)
+    SCHEDULE_FOLLOW_UP = "schedule_follow_up"  # a timer: remind the rep on a date the prospect named
     PREPARE_CALL_BRIEF = "prepare_call_brief"
     DRAFT_IO = "draft_io"
     SEND_PRICING = "send_pricing"
@@ -61,10 +64,10 @@ class PolicyDecision(Model):
 
 # Each agent may only propose the action types it needs (scoped tools).
 AGENT_PERMISSIONS: dict[str, frozenset[ActionType]] = {
-    "research": frozenset({ActionType.ENRICH_LEAD}),
-    "scoring": frozenset({ActionType.SCORE_LEAD}),
+    "research": frozenset({ActionType.ENRICH_LEAD, ActionType.SCORE_LEAD, ActionType.RECORD_RESEARCH}),
     "outreach": frozenset({ActionType.SEND_EMAIL}),
-    "reply_triage": frozenset({ActionType.CLASSIFY_REPLY, ActionType.FLAG_DEAL, ActionType.RECORD_LESSON}),
+    "reply": frozenset({ActionType.CLASSIFY_REPLY, ActionType.FLAG_DEAL, ActionType.RECORD_LESSON,
+                        ActionType.SEND_EMAIL, ActionType.BOOK_MEETING, ActionType.SCHEDULE_FOLLOW_UP}),
     "call_intel": frozenset({ActionType.UPDATE_DEAL, ActionType.RECORD_LESSON}),
     "call_brief": frozenset({ActionType.PREPARE_CALL_BRIEF}),
     "deal_desk": frozenset(

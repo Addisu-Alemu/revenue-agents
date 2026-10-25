@@ -2,21 +2,22 @@
 
 import pytest
 
-from revenue_agents import story
 from revenue_agents.demo_llm import demo_llm
 from revenue_agents.esign import EnvelopeStatus
 from revenue_agents.events import Event, EventType
 from revenue_agents.guardrails.approvals import ApprovalStatus
 from revenue_agents.llm import FakeLLM
 from revenue_agents.models import Reply, Stage
+from revenue_agents.runtime import ScriptedRuntime
 from revenue_agents.system import build_system
+from tests import story
 
 REP = "rep@cool.example"
 
 
 @pytest.fixture
 def system(tmp_path):
-    return build_system(demo_llm(), state_dir=tmp_path)
+    return build_system(ScriptedRuntime(demo_llm()), state_dir=tmp_path)
 
 
 def to_proposal(system, transcript):
@@ -164,7 +165,7 @@ def test_rejecting_the_requested_change_keeps_everything_as_it_was(system, trans
 def test_a_suspicious_email_never_changes_the_contract(tmp_path, transcript, replies):
     fooled = {"intent": "interested", "summary": "Asks for a lower budget.", "asks_for_pricing": False,
               "suggested_next_step": "Update the IO.", "contract_changes": [{"field": "budget_usd", "value": "1"}]}
-    system = build_system(FakeLLM({**demo_llm().responses, "ReplyClassification": fooled}), state_dir=tmp_path)
+    system = build_system(ScriptedRuntime(FakeLLM({**demo_llm().responses, "ReplyClassification": fooled})), state_dir=tmp_path)
     to_proposal(system, transcript)  # the model below is fooled: it reports the attacker's "change"
     system.orchestrator.handle(story.approval_event("send_io:D-001:IO-D-001", True, REP))
     attack = replies["R-004"].model_copy(update={

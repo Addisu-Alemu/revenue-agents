@@ -30,7 +30,7 @@ def lesson(lesson_id, segment="brand", day=1, applies_to=("outreach", "call_brie
 
 
 def test_seeded_with_mock_leads(crm):
-    assert len(crm.leads()) == 6
+    assert len(crm.leads()) == 8
     assert crm.get_lead("L-001").company == "BrightBite Burgers"
 
 
@@ -69,7 +69,7 @@ def test_new_inbound_lead_can_be_added(crm):
     crm.add_lead(new)
     crm.add_lead(new)  # adding twice is harmless
     assert crm.get_lead("L-099").company == "New Co"
-    assert len(crm.leads()) == 7
+    assert len(crm.leads()) == 9
 
 
 @pytest.mark.parametrize("call", [lambda c: c.get_lead("L-999"), lambda c: c.get_deal("D-999"),

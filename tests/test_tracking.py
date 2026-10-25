@@ -11,6 +11,7 @@ from revenue_agents.events import Event, EventType
 from revenue_agents.models import Stage
 from revenue_agents.segments import SEGMENTS_DIR, SegmentConfigError, SegmentRegistry, TrackingConfig
 from revenue_agents.storage import utc_now
+from revenue_agents.runtime import ScriptedRuntime
 from revenue_agents.system import build_system
 
 NOW = dt.datetime(2026, 10, 20, 9, 0, tzinfo=dt.timezone.utc)
@@ -18,7 +19,7 @@ NOW = dt.datetime(2026, 10, 20, 9, 0, tzinfo=dt.timezone.utc)
 
 @pytest.fixture
 def system(tmp_path):
-    return build_system(demo_llm(), state_dir=tmp_path)
+    return build_system(ScriptedRuntime(demo_llm()), state_dir=tmp_path)
 
 
 def put_in_stage(system, lead_id, stage, days_ago):
@@ -52,6 +53,16 @@ def test_closed_and_nurtured_deals_never_stall(system):
     later = utc_now() + dt.timedelta(days=30)  # Pebble & Pine (Tier C) has sat in "scored" for a month
 
     assert system.orchestrator._tracker.stalled(later) == []
+
+
+def test_a_deal_waiting_for_an_agreed_follow_up_is_not_stalled(system):
+    """Owen said "after the holidays" and the reply agent set a timer: waiting is the plan until that date."""
+    deal_id = put_in_stage(system, "L-002", Stage.REPLIED, days_ago=10)
+    system.crm.log(deal_id, "follow_up", "Follow up after the holidays", {"due": "2027-01-06", "reason": "holidays"})
+
+    assert system.orchestrator._tracker.stalled(NOW) == []
+    assert [s.deal_id for s in system.orchestrator._tracker.stalled(dt.datetime(2027, 1, 7, tzinfo=dt.timezone.utc))] == [
+        deal_id]
 
 
 def test_sla_check_flags_and_reminds_once(system):
@@ -112,7 +123,7 @@ def test_digest_lists_todays_lessons_and_is_saved(tmp_path, system, transcript):
 def test_empty_digest_says_none(system):
     report = system.orchestrator.handle(scheduled(EventType.DIGEST_DAILY))
     assert report.steps[1] == "Pipeline: empty"
-    assert report.steps.count("  none") == 7
+    assert report.steps.count("  none") == 8
 
 
 # --- Config ------------------------------------------------------------------------------

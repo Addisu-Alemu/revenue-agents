@@ -72,5 +72,30 @@
     "tech_stack": [],
     "managed_clients": 4,
     "signals": []
+  },
+  "crumbandco.example": {
+    "industry": "Bakery cafes",
+    "business_model": "franchise",
+    "employees": 1400,
+    "locations": 180,
+    "hq_country": "US",
+    "annual_ad_spend_usd": 1400000,
+    "tech_stack": ["Meta Ads", "DV360"],
+    "signals": [
+      {"type": "campaign", "detail": "Rolling out a spring seasonal menu across all stores", "date": "2026-10-02"}
+    ]
+  },
+  "northwindmedia.example": {
+    "industry": "Media agency",
+    "business_model": "agency",
+    "employees": 60,
+    "locations": 2,
+    "hq_country": "UK",
+    "annual_ad_spend_usd": 6000000,
+    "tech_stack": ["Google Ads"],
+    "managed_clients": 12,
+    "signals": [
+      {"type": "client_win", "detail": "Won three new retail clients this quarter", "date": "2026-10-01"}
+    ]
   }
 }

@@ -35,8 +35,8 @@ def email(**payload):
     ("type_", "agent"),
     [
         (ActionType.ENRICH_LEAD, "research"),
-        (ActionType.SCORE_LEAD, "scoring"),
-        (ActionType.CLASSIFY_REPLY, "reply_triage"),
+        (ActionType.SCORE_LEAD, "research"),
+        (ActionType.CLASSIFY_REPLY, "reply"),
         (ActionType.RECORD_LESSON, "call_intel"),
         (ActionType.DRAFT_IO, "deal_desk"),
     ],

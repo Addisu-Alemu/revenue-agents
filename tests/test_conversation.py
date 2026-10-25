@@ -2,17 +2,18 @@
 
 import pytest
 
-from revenue_agents import story
 from revenue_agents.demo_llm import REPLY_ANSWERS, demo_llm
 from revenue_agents.models import Stage
+from revenue_agents.runtime import ScriptedRuntime
 from revenue_agents.system import build_system
+from tests import story
 
 YOU = "you@cool.example"
 
 
 @pytest.fixture
 def system(tmp_path):
-    return build_system(demo_llm(), state_dir=tmp_path)
+    return build_system(ScriptedRuntime(demo_llm()), state_dir=tmp_path)
 
 
 def maya_emailed(system):
@@ -136,7 +137,7 @@ def test_a_pricing_question_is_never_answered_by_the_agent(system, replies):
 
 def test_the_answer_prompt_limits_claims_and_treats_the_email_as_untrusted(tmp_path, replies):
     llm = demo_llm()
-    maya_asked(build_system(llm, state_dir=tmp_path), replies)
+    maya_asked(build_system(ScriptedRuntime(llm), state_dir=tmp_path), replies)
     [call] = [c for c in llm.calls if c.schema == "AnswerDraft"]
 
     assert "Value propositions (the only claims you may make):" in call.prompt
@@ -148,7 +149,7 @@ def test_a_concern_phrased_as_a_question_is_answered_too(tmp_path, replies):
     """Found on a real Claude run: it read Maya's question as an objection, so no answer was drafted."""
     llm = demo_llm()
     llm.responses["ReplyClassification"] = {**REPLY_ANSWERS["R-000"], "intent": "objection"}
-    system = build_system(llm, state_dir=tmp_path)
+    system = build_system(ScriptedRuntime(llm), state_dir=tmp_path)
     maya_asked(system, replies)
 
     assert [r.id for r in system.approvals.pending()] == ["send_email:D-001:reply:R-000"]

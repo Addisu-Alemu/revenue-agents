@@ -17,7 +17,7 @@ def load(name):
 
 def test_all_leads_load():
     leads = [Lead.model_validate(item) for item in load("leads.json")]
-    assert len(leads) == 6
+    assert len(leads) == 8
     assert {lead.segment for lead in leads} == {"brand", "agency"}
 
 

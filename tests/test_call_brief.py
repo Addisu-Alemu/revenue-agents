@@ -2,7 +2,6 @@
 
 import pytest
 
-from revenue_agents import story
 from revenue_agents.agents.call_brief import CallBriefAgent
 from revenue_agents.demo import run
 from revenue_agents.demo_llm import demo_llm
@@ -10,14 +9,16 @@ from revenue_agents.events import Event, EventType
 from revenue_agents.guardrails.kill_switch import KillSwitch
 from revenue_agents.guardrails.policy import ActionType, AutonomyPolicy, Decision
 from revenue_agents.models import DealFields, Stage
+from revenue_agents.runtime import ScriptedRuntime
 from revenue_agents.system import build_system
+from tests import story
 
 REVIEWER = "you@cool.example"
 
 
 @pytest.fixture
 def system(tmp_path):
-    return build_system(demo_llm(), state_dir=tmp_path)
+    return build_system(ScriptedRuntime(demo_llm()), state_dir=tmp_path)
 
 
 def to_meeting(system):
@@ -115,10 +116,11 @@ def test_terminal_demo_shows_the_brief_and_labels_lesson_use(tmp_path):
     lines = []
     run(state_dir=tmp_path / "demo", auto_approve=True, out=lines.append)
     output = "\n".join(lines)
-    assert "Call brief for the rep (before the meeting):" in output
+    assert "Call brief for the rep:" in output
     assert "Questions to ask (needed before we can send a proposal)" in output
     assert "used in: D-001 (call brief)" in output
-    assert "D-002 (email)" in output
+    assert "D-007 (email)" in output  # Crumb & Co, a brand lead that arrived after the call
+    assert "D-008 (email)" in output  # Northwind, an agency: a global lesson crossed segments
     assert "Call brief updated for the next call with BrightBite Burgers: still missing budget usd" in output
 
 

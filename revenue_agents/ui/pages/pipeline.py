@@ -23,9 +23,9 @@ def render() -> None:
     components.page_header("Pipeline", "Deal state is owned by the orchestrator. A deal only moves when its "
                                        "stage's exit criteria are met.")
     deals = components.segment_deals(system)
-    st.caption(f"Showing **{st.session_state.segment}** deals · switch segment in the sidebar")
+    st.caption(f"Showing **{st.session_state.segment}** deals · change it in the sidebar")
     if not deals:
-        st.info("No deals yet. Start the story on the Live demo page.", icon=":material/info:")
+        st.info("No deals yet. Start the world on the Today page: leads arrive on their own.", icon=":material/info:")
         return
 
     for column, (title, stages) in zip(st.columns(len(COLUMNS)), COLUMNS):

@@ -1,8 +1,11 @@
-"""Scripted model answers for the mock data, used by `--llm scripted`.
+"""Scripted model decisions for the mock data, used by `--llm scripted`.
 
-They are written the way a good model would answer our mock leads, replies
-and transcript, so the whole flow can be demonstrated without API credit.
-The demo always says when these scripted answers are in use.
+The scripted runtime plays each agent's tool calls (see each agent's
+`script`); whenever the agent has to decide something (how to read a reply,
+what to write, when to meet), the answer comes from here. They are written
+the way a good model would answer our mock leads, replies and transcripts, so
+the whole flow can be demonstrated without API credit. The demo always says
+when these scripted answers are in use.
 """
 
 from __future__ import annotations
@@ -109,6 +112,11 @@ OUTREACH_OPENINGS: dict[str, tuple[str, int]] = {
                          "to manage.", 1),
     "Lumen Media Group": ("Congratulations on winning the national retail account.", 0),
     "Copperline Creative": ("Good luck with the regional restaurant chain pitch.", 0),
+    # Leads that arrive after the BrightBite calls: their emails can apply what those calls taught.
+    "Crumb & Co Bakeries": ("With the spring menu rolling out to all 180 bakeries, every local ad has to stay on-brand.",
+                            0),
+    "Northwind Media Partners": ("Congratulations on the three new retail clients: a short pilot on one of them is an "
+                                 "easy way to see results before committing.", 0),
 }
 DEFAULT_OPENING = ("I came across your team and thought this might be relevant.", 0)
 
@@ -168,6 +176,61 @@ def _answer(call: LLMCall) -> dict[str, Any]:
     return {"answer": text, "lessons_used": []}
 
 
+# The research agent's "why now" note, by company.
+RESEARCH_NOTES: dict[str, dict[str, str]] = {
+    "BrightBite Burgers": {"why_now": "60 new franchise locations are planned for 2027 and a national menu launch "
+                                      "is coming in Q1, so every location will need local versions of new ads.",
+                           "angle": "local versions at scale, with brand control"},
+    "Harbor Lane Home": {"why_now": "Their holiday promotion is running across 35 stores right now.",
+                         "angle": "keeping every store's ad on-brand"},
+    "Pebble & Pine Candles": {"why_now": "No buying signal: one location and no campaign in the data.",
+                              "angle": "none for now: nurture"},
+    "Lumen Media Group": {"why_now": "They just won a national retail account and are hiring three programmatic "
+                                     "traders, so creative volume is about to jump.",
+                          "angle": "creative variations for the new client"},
+    "Copperline Creative": {"why_now": "They are pitching a regional restaurant chain.",
+                            "angle": "local creative for every location if the pitch lands"},
+    "Solo Studio": {"why_now": "No buying signal: a four-client freelance studio.", "angle": "none for now: nurture"},
+    "Crumb & Co Bakeries": {"why_now": "A spring seasonal menu is rolling out across all 180 franchise bakeries.",
+                            "angle": "on-brand local versions, with franchisee approval"},
+    "Northwind Media Partners": {"why_now": "They won three new retail clients this quarter.",
+                                 "angle": "creative volume for new clients, starting small"},
+}
+
+
+def _research(call: LLMCall) -> dict[str, Any]:
+    company = re.search(r"^New lead: (.+?) \(", call.prompt, re.MULTILINE)
+    return RESEARCH_NOTES.get(company.group(1) if company else "",
+                              {"why_now": "No buying signal in the data.", "angle": "the segment's first value prop"})
+
+
+# When the reply agent books a meeting someone asked for (Maya: "Tuesday or Wednesday afternoon").
+MEETINGS: dict[str, dict[str, Any]] = {
+    "R-001": {"days_from_now": 3, "hour_utc": 15, "attendees": ["Maya Thompson"],
+              "note": "Intro call; Maya wants Ken (CFO) involved before any contract."},
+}
+
+# Follow-ups the reply agent sets when a prospect names a time.
+FOLLOW_UPS: dict[str, dict[str, Any]] = {
+    "R-002": {"on": "2027-01-05", "reason": "Budget unlocks in Q1: check in when Q1 planning starts."},
+    "R-003": {"on": "2027-01-06", "reason": "Not now; asked to talk after the holidays."},
+}
+
+
+def _reply_id(call: LLMCall) -> str:
+    match = re.search(r'source="reply:([^"]+)"', call.prompt)
+    return match.group(1) if match else ""
+
+
+def _meeting(call: LLMCall) -> dict[str, Any]:
+    return MEETINGS.get(_reply_id(call), {})
+
+
+def _follow_up(call: LLMCall) -> dict[str, Any]:
+    return FOLLOW_UPS.get(_reply_id(call), {})
+
+
 def demo_llm() -> FakeLLM:
-    return FakeLLM({"ReplyClassification": _reply, "CallDigest": _call, "OutreachDraft": _outreach,
-                    "AnswerDraft": _answer})
+    return FakeLLM({"ResearchNote": _research, "ReplyClassification": _reply, "CallDigest": _call,
+                    "OutreachDraft": _outreach, "AnswerDraft": _answer, "MeetingPlan": _meeting,
+                    "FollowUpPlan": _follow_up})

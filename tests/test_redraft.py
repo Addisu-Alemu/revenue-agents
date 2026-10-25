@@ -2,13 +2,14 @@
 
 import pytest
 
-from revenue_agents import story
 from revenue_agents.demo import run
 from revenue_agents.demo_llm import demo_llm
 from revenue_agents.events import Event, EventType
 from revenue_agents.guardrails.policy import ActionType
 from revenue_agents.models import Stage
+from revenue_agents.runtime import ScriptedRuntime
 from revenue_agents.system import build_system
+from tests import story
 
 REVIEWER = "maria@cool.example"
 FEEDBACK = "Mention their Q1 menu launch"
@@ -21,7 +22,7 @@ def llm():
 
 @pytest.fixture
 def system(tmp_path, llm):
-    system = build_system(llm, state_dir=tmp_path)
+    system = build_system(ScriptedRuntime(llm), state_dir=tmp_path)
     system.orchestrator.handle(Event(id="lead:L-001", type=EventType.LEAD_CREATED, payload={"lead_id": "L-001"}))
     return system
 
@@ -91,7 +92,7 @@ def test_two_redrafts_then_a_human_writes_it(system):
 
 
 def test_rejected_io_feedback_can_be_a_lesson_without_a_redraft(tmp_path, transcript):
-    system = build_system(demo_llm(), state_dir=tmp_path)
+    system = build_system(ScriptedRuntime(demo_llm()), state_dir=tmp_path)
     handle = system.orchestrator.handle
     handle(Event(id="lead:L-001", type=EventType.LEAD_CREATED, payload={"lead_id": "L-001"}))
     handle(story.approval_event("send_email:D-001:first_touch", True, REVIEWER))
@@ -106,7 +107,7 @@ def test_rejected_io_feedback_can_be_a_lesson_without_a_redraft(tmp_path, transc
 
 def test_a_failed_redraft_can_be_retried_without_duplicates(system):
     outreach = system.orchestrator._agents.outreach
-    original = outreach.run
+    original = outreach.first_touch
     calls = []
 
     def flaky(*args, **kwargs):
@@ -115,7 +116,7 @@ def test_a_failed_redraft_can_be_retried_without_duplicates(system):
             raise TimeoutError("model timed out")
         return original(*args, **kwargs)
 
-    outreach.run = flaky
+    outreach.first_touch = flaky
     with pytest.raises(TimeoutError):
         reject(system, "send_email:D-001:first_touch")
     reject(system, "send_email:D-001:first_touch")  # the webhook / click is retried
@@ -150,7 +151,7 @@ def test_a_redraft_that_breaks_the_rules_flags_the_deal(tmp_path, llm):
             return {"opening": "We guarantee a Q1 launch.", "value_prop_index": 0}
         return scripted(call)
 
-    system = build_system(type(llm)({**llm.responses, "OutreachDraft": guarantee_on_redraft}), state_dir=tmp_path)
+    system = build_system(ScriptedRuntime(type(llm)({**llm.responses, "OutreachDraft": guarantee_on_redraft})), state_dir=tmp_path)
     system.orchestrator.handle(Event(id="lead:L-001", type=EventType.LEAD_CREATED, payload={"lead_id": "L-001"}))
     reject(system, "send_email:D-001:first_touch")
 

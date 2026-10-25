@@ -30,7 +30,7 @@ _current_event: ContextVar[str] = ContextVar("current_event", default="manual")
 class Span(Model):
     event_id: str
     at: dt.datetime
-    kind: str  # "agent", "llm", "policy", "action" or "stage"
+    kind: str  # "run" (an agent run starts), "tool", "agent" (it ends), "policy", "action", "stage" or "llm"
     name: str
     duration_ms: float | None = None
     data: dict[str, Any] = Field(default_factory=dict)
@@ -44,6 +44,7 @@ class Tracer:
     def __init__(self, path: Path = STATE_DIR / "traces.jsonl") -> None:
         self._path = Path(path)
         self._listeners: list[Listener] = []
+        self._cache: tuple[tuple[int, int], list[Span]] | None = None
 
     @contextmanager
     def listening(self, listener: Listener) -> Iterator[None]:
@@ -76,10 +77,15 @@ class Tracer:
             listener(kind, name, data, duration_ms)
 
     def spans(self) -> list[Span]:
-        return [Span.model_validate(item) for item in read_jsonl(self._path)]
+        """Every recorded step, oldest first. Parsed once per change of the file (the live UI asks every second)."""
+        stat = self._path.stat() if self._path.exists() else None
+        version = (stat.st_mtime_ns, stat.st_size) if stat else (0, 0)
+        if self._cache is None or self._cache[0] != version:
+            self._cache = (version, [Span.model_validate(item) for item in read_jsonl(self._path)])
+        return list(self._cache[1])
 
     def count(self) -> int:
-        return len(read_jsonl(self._path))
+        return len(self.spans())
 
 
 class NullTracer(Tracer):

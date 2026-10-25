@@ -33,11 +33,14 @@ class ActionHandlers:
         return {
             ActionType.ENRICH_LEAD: self.enrich_lead,
             ActionType.SCORE_LEAD: self.score_lead,
+            ActionType.RECORD_RESEARCH: self.record_research,
             ActionType.UPDATE_DEAL: self.update_deal,
             ActionType.FLAG_DEAL: self.flag_deal,
             ActionType.CLASSIFY_REPLY: self.classify_reply,
             ActionType.RECORD_LESSON: self.record_lesson,
             ActionType.SEND_EMAIL: self.send_email,
+            ActionType.BOOK_MEETING: self.book_meeting,
+            ActionType.SCHEDULE_FOLLOW_UP: self.schedule_follow_up,
             ActionType.PREPARE_CALL_BRIEF: self.prepare_call_brief,
             ActionType.DRAFT_IO: self.draft_io,
             ActionType.SEND_IO: self.send_io,
@@ -56,6 +59,11 @@ class ActionHandlers:
         score = LeadScore.model_validate(action.payload["score"])
         self._crm.save_deal(deal.model_copy(update={"score": score}))
         self._crm.log(deal.id, "note", action.summary, {"score": action.payload["score"]})
+
+    def record_research(self, action: Action) -> None:
+        """The research agent's note: why this company might buy now, and what to lead with."""
+        self._crm.log(action.deal_id, "research", action.summary,
+                      {"why_now": action.payload["why_now"], "angle": action.payload["angle"]})
 
     def update_deal(self, action: Action) -> None:
         """Merge new facts into the deal. Empty values never erase what's already known."""
@@ -79,6 +87,11 @@ class ActionHandlers:
         self._crm.log(deal.id, "flag", action.summary, action.payload)
 
     def classify_reply(self, action: Action) -> None:
+        """Record how the reply was read, and put its flags (set in code, not by the model) on the deal."""
+        deal = self._crm.get_deal(action.deal_id)
+        flags = action.payload.get("flags", [])
+        if flags:
+            self._crm.save_deal(deal.model_copy(update={"flags": _merge_flags(deal.flags, flags)}))
         self._crm.log(action.deal_id, "reply", action.summary, action.payload)
 
     def record_lesson(self, action: Action) -> bool:
@@ -100,6 +113,21 @@ class ActionHandlers:
                       {**email, "message_id": message.id, "thread_id": message.thread_id})
         self._lessons.record_use(email.get("lessons_used", []), used_in=action.id, deal_id=action.deal_id)
         return {"status": "sent (mock)", "to": email["to"], "message_id": message.id}
+
+    def book_meeting(self, action: Action) -> dict[str, str]:
+        """Put the meeting the prospect asked for on the rep's calendar (mocked: an entry on the deal timeline)."""
+        payload = action.payload
+        self._crm.log(action.deal_id, "meeting_booked", action.summary,
+                      {"when": payload["when"], "attendees": payload.get("attendees", []),
+                       "note": payload.get("note", ""), "reply_id": payload.get("reply_id")})
+        return {"status": "booked (mock calendar)", "when": payload["when"]}
+
+    def schedule_follow_up(self, action: Action) -> dict[str, str]:
+        """A timer on the deal: on that date the rep is reminded to follow up (the scheduler fires it)."""
+        payload = action.payload
+        self._crm.log(action.deal_id, "follow_up", action.summary,
+                      {"due": payload["due"], "reason": payload["reason"], "reply_id": payload.get("reply_id")})
+        return {"status": "scheduled", "due": payload["due"]}
 
     def prepare_call_brief(self, action: Action) -> None:
         self._crm.log(action.deal_id, "call_brief", action.summary,

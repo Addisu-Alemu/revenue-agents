@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from revenue_agents.guardrails.approvals import ApprovalQueue, ApprovalStatus
 from revenue_agents.guardrails.audit import AuditLog
 from revenue_agents.guardrails.claims import ActionClaims
-from revenue_agents.guardrails.policy import Action, ActionType, AutonomyPolicy, Decision
+from revenue_agents.guardrails.policy import Action, ActionType, AutonomyPolicy, Decision, PolicyDecision
 from revenue_agents.models import Deal, Model
 
 if TYPE_CHECKING:
@@ -61,6 +61,16 @@ class ActionGateway:
         self._handlers = handlers
         self._claims = claims or ActionClaims()
         self._tracer = tracer
+
+    def check(self, action: Action, deal: Deal) -> PolicyDecision | None:
+        """What the policy would decide, without doing or recording anything. None: the action already ran.
+
+        The agents' PreToolUse hook asks this to allow, defer or deny a tool call; submit() still decides
+        again before anything runs.
+        """
+        if self._claims.exists(action.id):
+            return None
+        return self._policy.decide(action, deal)
 
     def submit(self, action: Action, deal: Deal) -> ActionResult:
         """An agent proposes an action. The policy decides what happens to it."""

@@ -1,6 +1,8 @@
-"""The demo story: which events happen, in what order. Shared by the terminal demo and the UI.
+"""One segment's story in a fixed order, for tests: it drives the orchestrator event by event.
 
-The order is driven by the data, not by segment-specific code:
+The product doesn't run a script: the live world (revenue_agents/world.py) delivers leads, replies, calls and
+signatures when they happen, in reaction to what the agents did. Tests use this fixed order instead, so each
+step can be checked on its own. The order is driven by the data, not by segment-specific code:
   1. the first lead that has a call transcript: lead -> its replies and calls in date order (a question,
      a meeting request, an intro call, a call with the CFO, then a change to the IO) -> signature
   2. every other lead in the segment, then their replies
@@ -10,15 +12,14 @@ So the lesson learned on the call is available when the later emails are drafted
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from revenue_agents.events import Event, EventType
+from revenue_agents.events import (approval_event, call_event, lead_event, reply_event,  # noqa: F401
+                                   scheduled_events, signature_event, terms_event)
 from revenue_agents.models import Lead, Reply
-from revenue_agents.storage import utc_now
 
 if TYPE_CHECKING:
     from revenue_agents.system import System
@@ -133,48 +134,3 @@ def _signature(system: System, lead: Lead) -> list[str]:
 
 def _lead_step(lead: Lead) -> Step:
     return Step("lead", f"New lead: {lead.company} ({lead.contact.name}, {lead.contact.title})", lead=lead)
-
-
-# --- Event builders ------------------------------------------------------------------
-
-
-def lead_event(lead: Lead) -> Event:
-    return Event(id=f"lead:{lead.id}", type=EventType.LEAD_CREATED, payload={"lead_id": lead.id})
-
-
-def reply_event(reply: Reply) -> Event:
-    """The reply arrives now, as an email webhook would deliver it, so the thread reads in the order it happened."""
-    arrived = reply.model_copy(update={"received_at": utc_now()})
-    return Event(id=f"reply:{reply.id}", type=EventType.REPLY_RECEIVED,
-                 payload={"reply": arrived.model_dump(mode="json", by_alias=True)})
-
-
-def call_event(lead: Lead, transcript: Path) -> Event:
-    return Event(id=f"call:{transcript.stem}", type=EventType.CALL_COMPLETED,
-                 payload={"lead_id": lead.id, "transcript_id": transcript.stem, "transcript": transcript.read_text(encoding="utf-8")})
-
-
-def terms_event(deal_id: str, changes: dict, by: str) -> Event:
-    """A rep changed the deal's terms (e.g. Net 45 instead of Net 30). Each change is its own event."""
-    return Event(id=f"terms:{deal_id}:{utc_now().isoformat()}", type=EventType.TERMS_CHANGED,
-                 payload={"deal_id": deal_id, "changes": changes, "by": by})
-
-
-def signature_event(envelope_id: str) -> Event:
-    return Event(id=f"esign:{envelope_id}", type=EventType.SIGNATURE_COMPLETED, payload={"envelope_id": envelope_id})
-
-
-def approval_event(request_id: str, approved: bool, reviewer: str, note: str | None = None,
-                   save_lesson: bool = False, edits: dict[str, str] | None = None) -> Event:
-    """A human's decision. `edits` (an email's subject and/or body) are the reviewer's changes before approving."""
-    return Event(id=f"approval:{request_id}", type=EventType.APPROVAL_DECIDED,
-                 payload={"request_id": request_id, "approved": approved, "reviewer": reviewer, "note": note,
-                          "save_lesson": save_lesson, "edits": edits or {}})
-
-
-def scheduled_events(days: int) -> tuple[Event, Event]:
-    """The SLA check and digest the scheduler would send `days` from now."""
-    now = utc_now() + dt.timedelta(days=days)
-    day, payload = now.date().isoformat(), {"now": now.isoformat()}
-    return (Event(id=f"sla:{day}", type=EventType.SLA_CHECK, payload=payload),
-            Event(id=f"digest:{day}", type=EventType.DIGEST_DAILY, payload=payload))

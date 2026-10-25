@@ -1,0 +1,25 @@
+{
+  "L-001": {
+    "persona": "Maya Thompson, VP of Marketing at BrightBite Burgers (420 franchise locations). Burned last year by a template tool that let franchisees go off-brand, so brand control comes first. Wants local versions of ads for a national menu launch in Q1. Can't sign: Ken Adeyemi, the CFO, signs and dislikes long vendor contracts. Friendly, short emails, signs off 'Maya'.",
+    "beats": [
+      {"after": "email", "nth": 1, "reply": "R-000", "min_hours": 6},
+      {"after": "email", "nth": 2, "reply": "R-001", "min_hours": 6, "duplicate": true},
+      {"after": "meeting", "call": "L-001_intro_call", "minutes_after": 45},
+      {"after": "call", "nth": 1, "call": "L-001_discovery_call", "min_hours": 48},
+      {"after": "io_sent", "nth": 1, "reply": "R-004", "min_hours": 20},
+      {"after": "io_sent", "nth": 2, "sign": "Ken Adeyemi", "min_hours": 20, "forged_first": true}
+    ]
+  },
+  "L-002": {
+    "persona": "Owen Castillo, Marketing Manager at Harbor Lane Home (35 stores), busy with a holiday promotion. Not interested until after the holidays.",
+    "beats": [
+      {"after": "email", "nth": 1, "reply": "R-003", "min_hours": 6, "verbatim": true}
+    ]
+  },
+  "L-005": {
+    "persona": "Sam Whitfield, Account Director at Copperline Creative (14 clients). Budget locked until Q1; pays a flat fee to the current vendor and worries about price. Direct, a little skeptical, signs off 'Sam'.",
+    "beats": [
+      {"after": "email", "nth": 1, "reply": "R-002", "min_hours": 6}
+    ]
+  }
+}

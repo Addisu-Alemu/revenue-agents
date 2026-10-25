@@ -15,7 +15,7 @@ def render() -> None:
     deals = components.segment_deals(system)
     if not deals:
         components.page_header("Deal", "Nothing to show yet.")
-        st.info("No deals yet. Start the story on the Live demo page.", icon=":material/info:")
+        st.info("No deals yet. Start the world on the Today page: leads arrive on their own.", icon=":material/info:")
         return
 
     ids = [deal.id for deal in deals]
@@ -40,6 +40,13 @@ def render() -> None:
     with overview:
         _overview(deal)
     with brief:
+        notes = [a.data for a in activities if a.kind == "research"]
+        if notes:
+            st.markdown(f":material/travel_explore: **Why now** (research agent): {notes[-1]['why_now']}  \n"
+                        f"<span class='ra-muted'>Lead with: {notes[-1]['angle']}</span>", unsafe_allow_html=True)
+        meetings = [a for a in activities if a.kind == "meeting_booked"]
+        if meetings:
+            st.markdown(f":material/event: **{meetings[-1].summary}**")
         briefs = [a for a in activities if a.kind == "call_brief"]
         if briefs:
             with st.container(border=True):
@@ -159,7 +166,7 @@ def _insertion_order(system, activities) -> None:
     if deal.stage in (Stage.PROPOSAL, Stage.SIGNATURE):
         with st.expander("Change the terms (redrafts the IO)", icon=":material/edit_document:",
                          expanded="io_change_requested" in deal.flags):
-            components.terms_form(system, deal, f"terms-{deal.id}")
+            components.terms_form(context.get_desk(), deal, f"terms-{deal.id}")
 
 
 def _previous(drafts, draft):

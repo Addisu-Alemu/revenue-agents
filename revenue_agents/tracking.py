@@ -28,7 +28,8 @@ CLOSED = (Stage.HANDOFF, Stage.CLOSED_LOST)
 ATTENTION_FLAGS = ("pricing_requested", "possible_prompt_injection", "objection", "unsubscribe", "io_blocked",
                    "outreach_draft_rejected", "unknown_product_mentioned", "check_flight_dates",
                    "reply_without_outreach", "needs_manual_email", "signature_unconfirmed", "signature_mismatch",
-                   "io_change_requested", "signature_on_voided_io")
+                   "io_change_requested", "signature_on_voided_io", "needs_human", "reply_needs_human",
+                   "call_needs_review", "follow_up_due")
 
 
 class StalledDeal(Model):
@@ -57,6 +58,7 @@ class Digest(Model):
     stuck_actions: list[str] = Field(default_factory=list)
     approved_not_executed: list[str] = Field(default_factory=list)
     held_events: list[str] = Field(default_factory=list)
+    failed_events: list[str] = Field(default_factory=list)  # failed on replay after a pause: for a human
 
     def render(self) -> str:
         lines = [f"Daily digest {self.date.isoformat()}",
@@ -75,6 +77,9 @@ class Digest(Model):
         lines += [f"  - {summary} (use Run now)" for summary in self.approved_not_executed] or ["  none"]
         lines.append(f"Held by the kill switch ({len(self.held_events)}):")
         lines += [f"  - {event}" for event in self.held_events] or ["  none"]
+        lines.append(f"Failed on replay ({len(self.failed_events)}):")
+        lines += [f"  - {event} (set aside after the pause: check by hand)"
+                  for event in self.failed_events] or ["  none"]
         lines.append(f"Stuck actions ({len(self.stuck_actions)}):")
         lines += [f"  - {action_id} (started but never finished: check by hand)" for action_id in self.stuck_actions] or [
             "  none"]
@@ -83,7 +88,8 @@ class Digest(Model):
 
 class Tracker:
     def __init__(self, crm: CRM, approvals: ApprovalQueue, lessons: LessonStore, segments: SegmentRegistry,
-                 claims: ActionClaims, digest_dir: Path, held: HeldEvents) -> None:
+                 claims: ActionClaims, digest_dir: Path, held: HeldEvents,
+                 failed: HeldEvents) -> None:
         self._crm = crm
         self._approvals = approvals
         self._lessons = lessons
@@ -91,6 +97,7 @@ class Tracker:
         self._claims = claims
         self._digest_dir = Path(digest_dir)
         self._held = held
+        self._failed = failed
 
     def approved_waiting(self) -> list[ApprovalRequest]:
         """Approved by a human but never executed (no claim): blocked by the kill switch, or failed."""
@@ -100,7 +107,7 @@ class Tracker:
     def stalled(self, now: dt.datetime) -> list[StalledDeal]:
         result = []
         for deal in self._crm.deals():
-            if deal.stage in CLOSED or deal.stage_entered_at is None or self._nurtured(deal):
+            if deal.stage in CLOSED or deal.stage_entered_at is None or self._nurtured(deal) or self._parked(deal, now):
                 continue
             limit = self._segments.get(deal.segment).tracking.limit_for(deal.stage)
             days = (now - deal.stage_entered_at).total_seconds() / 86400
@@ -114,6 +121,11 @@ class Tracker:
         """Scored leads below the segment's outreach tiers are parked on purpose: not stalled."""
         outreach_tiers = self._segments.get(deal.segment).messaging.outreach_tiers
         return deal.stage is Stage.SCORED and deal.score is not None and deal.score.tier not in outreach_tiers
+
+    def _parked(self, deal: Deal, now: dt.datetime) -> bool:
+        """The prospect named a later date and an agent set a follow-up for it: waiting is the plan, not a stall."""
+        due = [activity.data.get("due") for activity in self._crm.timeline(deal.id) if activity.kind == "follow_up"]
+        return any(day and dt.date.fromisoformat(day) > now.date() for day in due)
 
     def digest(self, now: dt.datetime) -> Digest:
         deals = self._crm.deals()
@@ -132,6 +144,7 @@ class Tracker:
         digest = Digest(date=now.date(), pipeline=pipeline, approvals_waiting=waiting, stalled=self.stalled(now),
                         needs_attention=attention, new_lessons=new_lessons, stuck_actions=self._claims.in_progress(),
                         approved_not_executed=[r.action.summary for r in self.approved_waiting()],
-                        held_events=[f"{e.type.value} ({e.id})" for e in self._held.all()])
+                        held_events=[f"{e.type.value} ({e.id})" for e in self._held.all()],
+                        failed_events=[f"{e.type.value} ({e.id})" for e in self._failed.all()])
         write_json(self._digest_dir / f"{digest.date.isoformat()}.json", digest.model_dump(mode="json"))
         return digest

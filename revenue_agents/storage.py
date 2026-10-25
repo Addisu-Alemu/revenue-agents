@@ -13,7 +13,7 @@ import json
 import os
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,6 +38,10 @@ if os.name == "nt":  # pragma: no cover - runs on Windows only
         file.seek(0)
         msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
 
+    def _try_lock(file) -> None:
+        file.seek(0)
+        msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)  # raises OSError at once if another process holds it
+
 else:
     import fcntl
 
@@ -47,9 +51,23 @@ else:
     def _unlock(file) -> None:
         fcntl.flock(file, fcntl.LOCK_UN)
 
+    def _try_lock(file) -> None:
+        fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises OSError at once if another process holds it
+
+
+# The live world runs on simulated time: while a world clock is set, every timestamp (audit, approvals, deal
+# stages, stall checks) is world time, so the whole system agrees on what "now" is.
+_clock: Callable[[], datetime] | None = None
+
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return _clock() if _clock else datetime.now(timezone.utc)
+
+
+def set_clock(clock: Callable[[], datetime] | None) -> None:
+    """Use `clock` for utc_now() in this process (None: the real time again)."""
+    global _clock
+    _clock = clock
 
 
 def read_json(path: Path, default: Any) -> Any:
@@ -77,6 +95,19 @@ def _replace(source: str, target: Path, attempts: int = 20) -> None:
             if attempt == attempts - 1:
                 raise
             time.sleep(0.05)
+
+
+def try_lock(path: Path):
+    """Take an exclusive lock without waiting, and keep it until the returned file is closed. None if it's taken."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+", encoding=ENCODING)
+    try:
+        _try_lock(handle)
+    except OSError:
+        handle.close()
+        return None
+    return handle
 
 
 @contextmanager

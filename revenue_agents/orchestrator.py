@@ -1,8 +1,9 @@
 """Orchestrator: owns deal state and decides which agent works next.
 
-It reacts to events, runs the right agents, sends every proposed action
-through the gateway, and moves the deal forward only when the next stage's
-criteria are met. Each event id is claimed before processing, so a webhook
+It reacts to events, gives the right agent its task, and moves the deal
+forward only when the next stage's criteria are met. Agents work in a loop
+with their own tools (runtime.py): every side effect they attempt goes through
+the gateway, and the orchestrator sees each outcome as it happens. Each event id is claimed before processing, so a webhook
 delivered twice is handled once; if processing fails, the claim is released
 so a retry can run.
 
@@ -10,34 +11,40 @@ The kill switch is a pause: while it is on, incoming events are held (not
 processed, not lost) and approved actions wait. resume() releases the switch,
 replays held events in arrival order, then runs approved actions that never
 ran. Human decisions (approval.decided) and the digest are still accepted
-while paused; the gateway guarantees nothing executes.
+while paused; the gateway guarantees nothing executes. A rejection is
+recorded at once, but its redraft and lesson wait for the release. On replay,
+an event that fails is set aside for a human (failed events, in the digest)
+and the rest carry on; if the model fails, the replay stops and pauses again,
+so nothing runs out of order.
 
-    lead.created     -> research -> scoring -> outreach (Tier A waits for approval)
+    lead.created     -> research agent (enrich, score with code, why-now note) -> outreach agent
+                        (Tier A waits for approval; Tier C goes to nurture)
     approval.decided -> execute the approved action; a rejected email with a note is redrafted
                         (max 2 redrafts), and the note can be saved as a lesson
-    reply.received   -> reply triage -> flags (meeting / pricing / injection / unsubscribe); a product question
-                        gets an answer drafted by outreach (top tiers wait for approval); a meeting request moves
-                        the deal to Meeting and prepares a call brief for the rep; a reply from a lead we never
-                        emailed is flagged and doesn't move the deal
-    call.completed   -> call intel -> qualified? -> deal desk drafts IO (sending waits for approval)
+    reply.received   -> reply agent: classifies (code adds pricing / injection flags), then answers a product
+                        question (top tiers wait for approval), books a meeting, sets a follow-up or hands it to a
+                        human; a meeting request moves the deal to Meeting and prepares a call brief for the rep; an
+                        unsubscribe closes it; a reply from a lead we never emailed is flagged and doesn't move it
+    call.completed   -> call intel agent -> qualified? -> deal desk drafts the IO (sending waits for approval)
     signature.completed -> verify the envelope with the e-sign provider -> close won -> handoff
+    follow_up.due    -> a follow-up an agent scheduled is due: remind the rep
     sla.check        -> flag stalled deals and remind the rep (once per deal and stage)
     digest.daily     -> summary: approvals waiting, stalled and flagged deals, new lessons, stuck actions
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from pydantic import Field
 
 from revenue_agents.agents.call_brief import CallBriefAgent
-from revenue_agents.agents.call_intel import CallIntelAgent
+from revenue_agents.agents.call_intel import CallIntelAgent, saved_fields
 from revenue_agents.agents.deal_desk import DealDeskAgent, io_terms
-from revenue_agents.agents.outreach import DraftRejectedError, OutreachAgent, Review
-from revenue_agents.agents.reply_triage import ReplyTriageAgent
+from revenue_agents.agents.outreach import OutreachAgent, Review
+from revenue_agents.agents.reply import CONTRACT_STAGES, ReplyAgent, read_classification
 from revenue_agents.agents.research import ResearchAgent
-from revenue_agents.agents.scoring import ScoringAgent
 from revenue_agents.crm import CRM
 from revenue_agents.esign import EnvelopeStatus, ESignProvider
 from revenue_agents.events import Event, EventType
@@ -49,7 +56,9 @@ from revenue_agents.guardrails.held_events import HeldEvents
 from revenue_agents.guardrails.kill_switch import KillSwitch
 from revenue_agents.guardrails.policy import Action, ActionType
 from revenue_agents.lessons import LessonStore
+from revenue_agents.llm import LLMError
 from revenue_agents.models import Deal, DealFields, Lesson, Message, Model, Reply, Stage
+from revenue_agents.runtime import AgentHost, AgentRun, AgentTask
 from revenue_agents.segments import SegmentRegistry
 from revenue_agents.stages import ORDER, is_forward, missing_for
 from revenue_agents.storage import utc_now
@@ -59,15 +68,6 @@ from revenue_agents.tracking import Tracker
 # Accepted even while the kill switch is on: human decisions are recorded (the gateway still blocks
 # execution), and the digest only reports.
 ACCEPTED_WHILE_PAUSED = frozenset({EventType.APPROVAL_DECIDED, EventType.DIGEST_DAILY})
-
-# A question in these replies gets an answer drafted (a concern phrased as a question counts as an objection).
-ANSWERABLE_INTENTS = frozenset({"interested", "objection"})
-
-# Once an IO exists, a reply about it is for the rep: contract terms change only through a person.
-CONTRACT_STAGES = frozenset({Stage.PROPOSAL, Stage.SIGNATURE})
-
-# Replies with these flags are answered by a human, never drafted by an agent.
-HUMAN_ONLY_FLAGS = frozenset({"pricing_requested", "possible_prompt_injection"})
 
 # A first email can be redrafted twice after rejection; after that a human writes it.
 MAX_DRAFTS = 3
@@ -79,12 +79,14 @@ STAGE_AFTER = {ActionType.SEND_EMAIL: Stage.OUTREACH, ActionType.DRAFT_IO: Stage
 
 @dataclass
 class Agents:
+    """The AI agents (tool loops run by `host`) and the code skills (call brief, deal desk: exact on purpose)."""
+
+    host: AgentHost
     research: ResearchAgent
-    scoring: ScoringAgent
     outreach: OutreachAgent
-    reply_triage: ReplyTriageAgent
-    call_brief: CallBriefAgent
+    reply: ReplyAgent
     call_intel: CallIntelAgent
+    call_brief: CallBriefAgent
     deal_desk: DealDeskAgent
 
 
@@ -102,7 +104,7 @@ class Orchestrator:
     def __init__(self, crm: CRM, lessons: LessonStore, gateway: ActionGateway, approvals: ApprovalQueue,
                  audit: AuditLog, segments: SegmentRegistry, agents: Agents, events: ActionClaims,
                  tracker: Tracker, esign: ESignProvider, kill_switch: KillSwitch, held: HeldEvents,
-                 tracer: Tracer | None = None) -> None:
+                 failed: HeldEvents, tracer: Tracer | None = None) -> None:
         self._crm = crm
         self._lessons = lessons
         self._gateway = gateway
@@ -115,6 +117,7 @@ class Orchestrator:
         self._esign = esign
         self._kill_switch = kill_switch
         self._held = held
+        self._failed = failed  # events that failed on replay: set aside for a human
         self._tracer = tracer or NullTracer()
         self._handlers = {
             EventType.LEAD_CREATED: self._on_lead_created,
@@ -123,6 +126,7 @@ class Orchestrator:
             EventType.CALL_COMPLETED: self._on_call,
             EventType.SIGNATURE_COMPLETED: self._on_signature,
             EventType.TERMS_CHANGED: self._on_terms_changed,
+            EventType.FOLLOW_UP_DUE: self._on_follow_up_due,
             EventType.SLA_CHECK: self._on_sla_check,
             EventType.DIGEST_DAILY: self._on_digest,
         }
@@ -170,7 +174,18 @@ class Orchestrator:
         self._audit.record(self.name, "kill_switch_released", detail=f"by {by}")
         steps = [f"Kill switch OFF (by {by}). Replaying {len(self._held.all())} held event(s)."]
         for event in self._held.all():
-            report = self.handle(event)
+            try:
+                report = self.handle(event)
+            except LLMError as error:
+                # The model is down: the rest would fail too. Keep them held, in order, and pause again.
+                return steps + self.pause(f"Replay stopped at {event.id}: {error}", by=self.name)
+            except Exception as error:
+                # One bad event mustn't block the others: set it aside for a human and carry on.
+                self._held.remove(event.id)
+                self._failed.hold(event)
+                steps.append(f"{event.type.value} {event.id}: failed ({type(error).__name__}: {error}); "
+                             "set aside for a human, the rest carries on")
+                continue
             self._held.remove(event.id)
             steps += [f"{event.type.value} {event.id}:"] + [f"  {line}" for line in report.steps]
         for request in self.approved_waiting():
@@ -199,13 +214,13 @@ class Orchestrator:
         deal = self._crm.deal_for_lead(lead.id)
         steps = [f"New lead: {lead.company} ({lead.segment}) -> deal {deal.id}"]
 
-        steps += self._submit(self._agents.research.run(lead, deal).actions)
+        _, lines = self._work(self._agents.research.task(lead, deal))
+        steps += lines
         steps += self._advance(deal.id, Stage.ENRICHED)
         deal = self._crm.get_deal(deal.id)
         if deal.enrichment is None:
             return steps + ["Stopped: lead could not be enriched"]
 
-        steps += self._submit(self._agents.scoring.run(lead, deal, deal.enrichment).actions)
         steps += self._advance(deal.id, Stage.SCORED)
         deal = self._crm.get_deal(deal.id)
         if deal.score is None:
@@ -213,15 +228,19 @@ class Orchestrator:
 
         if deal.score.tier not in self._segments.get(lead.segment).messaging.outreach_tiers:
             return steps + [f"Tier {deal.score.tier.value}: no outreach, left for nurture"]
+        return steps + self._first_email(lead, deal)
 
-        lessons = self._lessons.for_segment(lead.segment, purpose="outreach")
-        try:
-            result = self._agents.outreach.run(lead, deal, deal.enrichment, lessons)
-        except DraftRejectedError as error:
-            return steps + self._flag(deal, "outreach_draft_rejected", str(error))
-        if result.output.lessons_used:
-            steps.append(f"Draft uses lessons: {', '.join(result.output.lessons_used)}")
-        return steps + self._submit(result.actions)
+    def _first_email(self, lead, deal: Deal, review: Review | None = None) -> list[str]:
+        """The outreach agent drafts, checks and sends. If it ends without an acceptable draft, a human writes it."""
+        run, lines = self._work(self._agents.outreach.first_touch(lead, deal, review))
+        sends = [call for call in run.called("send_email") if call.action is not None]
+        if not sends:
+            drafts = run.called("draft_email")
+            problem = drafts[-1].result if drafts else (run.summary or "no draft was written")
+            return lines + self._flag(deal, "outreach_draft_rejected", f"No acceptable draft for {lead.company}: "
+                                                                       f"{problem}")
+        used = sends[-1].action.payload.get("lessons_used")
+        return ([f"Draft uses lessons: {', '.join(used)}"] if used else []) + lines
 
     def _on_approval(self, event: Event) -> list[str]:
         request_id, reviewer, approved = event.payload["request_id"], event.payload["reviewer"], event.payload["approved"]
@@ -242,6 +261,11 @@ class Orchestrator:
             return [f"Already {request.status.value} by {request.decided_by}: decision not changed"]
 
         if not approved:
+            if self._kill_switch.is_engaged() and (request.note or "").strip():
+                # The decision stands now; the redraft and the lesson (model calls, side effects) wait for release.
+                later = event.model_copy(update={"id": f"{event.id}:after_pause"})
+                return steps + [f"Rejected by {request.decided_by}: {request.id}"] + self._hold(
+                    later, "Agents paused").steps
             return self._after_rejection(request, event.payload.get("save_lesson", False))
         # Same decision again (e.g. a retry after a failure): carry on and run it. Actions run once.
         return steps + self._execute_approved(request)
@@ -277,12 +301,7 @@ class Orchestrator:
 
         lead = self._crm.get_lead(deal.lead_id)
         review = Review(feedback=note, previous_body=request.action.payload["body"], next_version=version)
-        lessons = self._lessons.for_segment(lead.segment, purpose="outreach")
-        try:
-            result = self._agents.outreach.run(lead, deal, deal.enrichment, lessons, review=review)
-        except DraftRejectedError as error:
-            return self._flag(deal, "outreach_draft_rejected", str(error))
-        return [f"Redrafting with the reviewer's feedback (v{version})"] + self._submit(result.actions)
+        return [f"Redrafting with the reviewer's feedback (v{version})"] + self._first_email(lead, deal, review)
 
     def _execute_approved(self, request: ApprovalRequest) -> list[str]:
         deal = self._crm.get_deal(request.action.deal_id)
@@ -299,74 +318,72 @@ class Orchestrator:
         reply = Reply.model_validate(event.payload["reply"])
         lead = self._crm.get_lead(reply.lead_id)
         deal = self._crm.deal_for_lead(lead.id)
-        result = self._agents.reply_triage.run(reply, lead, deal)
-        triage = result.output
-        steps = [f"Reply {reply.id} from {lead.contact.name}: {triage.classification.intent}"]
-        if triage.flags:
-            steps.append(f"Flags: {', '.join(triage.flags)}")
-
         answers = self._email_answered_by(reply, deal)
+
+        def replied(action: Action, result: ActionResult) -> list[str]:
+            # Classified, and it answers one of our emails: the deal is Replied from here, so an answer the
+            # agent drafts next is treated as a reply to this lead (top tiers wait for a human).
+            if answers and action.type is ActionType.CLASSIFY_REPLY and result.outcome is Outcome.EXECUTED:
+                return self._advance(deal.id, Stage.REPLIED)
+            return []
+
+        run, lines = self._work(self._agents.reply.task(reply, lead, deal, answers), also=replied)
+        reading = read_classification(run)
+        intent = reading[0].intent if reading else "not classified"
+        flags = reading[1] if reading else []
+        steps = [f"Reply {reply.id} from {lead.contact.name}: {intent}"]
+        if flags:
+            steps.append(f"Flags: {', '.join(flags)}")
+        meta = {"intent": intent, "flags": flags}
+        if reading:
+            meta.update(summary=reading[0].summary, suggested_next_step=reading[0].suggested_next_step)
         self._crm.add_message(Message(
             id=f"msg:reply:{reply.id}", thread_id=answers.thread_id if answers else f"T-{deal.id}", deal_id=deal.id,
             direction="inbound", sender=reply.sender, to=answers.sender if answers else "", subject=reply.subject,
-            body=reply.body, at=reply.received_at, in_reply_to=answers.id if answers else None,
-            meta={"intent": triage.classification.intent, "summary": triage.classification.summary,
-                  "flags": triage.flags, "suggested_next_step": triage.classification.suggested_next_step},
+            body=reply.body, at=reply.received_at, in_reply_to=answers.id if answers else None, meta=meta,
         ))
         if answers:
             steps.append(f"Linked to our email {answers.id} in thread {answers.thread_id}")
+        answered = [call for call in run.called("answer_question") if call.action is not None]
+        if answered and reading and reading[0].question:
+            steps.append(f"Question to answer: {reading[0].question}")
+            used = answered[-1].action.payload.get("lessons_used")
+            if used:
+                steps.append(f"Answer uses lessons: {', '.join(used)}")
+        steps += lines
+
+        if reading is None:
+            return steps + self._flag(deal, "reply_needs_human", f"the reply agent didn't classify {reply.id}")
+        classification = reading[0]
 
         if answers is None:
             # We never emailed this lead, so this can't be a reply to us: a data error, a misrouted
             # thread, or a spoofed message. Record and flag it, learn nothing, don't move the deal.
-            actions = [a for a in result.actions if a.type is not ActionType.RECORD_LESSON]
-            steps += self._submit(actions)
             steps += self._flag(deal, "reply_without_outreach", f"{reply.id} arrived but we never emailed {lead.contact.name}")
-            if "unsubscribe" in triage.flags:  # always honour an unsubscribe
+            if "unsubscribe" in flags:  # always honour an unsubscribe
                 steps += self._advance(deal.id, Stage.CLOSED_LOST, reason="contact unsubscribed")
             return steps + ["Reply without outreach: flagged for a human, stage unchanged, nothing learned"]
 
-        steps += self._submit(result.actions)
         steps += self._advance(deal.id, Stage.REPLIED)
-
-        flags = set(self._crm.get_deal(deal.id).flags)
-        if "unsubscribe" in triage.flags:
+        if "unsubscribe" in flags:
             return steps + self._advance(deal.id, Stage.CLOSED_LOST, reason="contact unsubscribed")
-        question = triage.classification.question
-        if deal.stage in CONTRACT_STAGES and triage.classification.intent in ("objection", "interested", "other"):
-            changes = {change.field: change.value for change in triage.classification.contract_changes}
-            if deal.stage is Stage.SIGNATURE and changes and "possible_prompt_injection" not in triage.flags:
+        if deal.stage in CONTRACT_STAGES and classification.intent in ("objection", "interested", "other"):
+            changes = {change.field: change.value for change in classification.contract_changes}
+            if deal.stage is Stage.SIGNATURE and changes and "possible_prompt_injection" not in flags:
                 # The customer asked for specific changes to the IO they received: draft them for the rep to approve.
                 return steps + self._propose_io_change(lead, deal.id, changes, reply)
             # Otherwise a person reads it: flag it; the rep updates the terms and the IO is redrafted.
             return steps + self._flag(self._crm.get_deal(deal.id), "io_change_requested",
-                                      f"{lead.contact.name} wrote about the IO: {triage.classification.summary}")
-        if question and triage.classification.intent in ANSWERABLE_INTENTS and not HUMAN_ONLY_FLAGS & set(triage.flags):
-            steps += self._answer_question(lead, deal.id, reply, question)
-        if "meeting_requested" in flags:
+                                      f"{lead.contact.name} wrote about the IO: {classification.summary}")
+        if "meeting_requested" in self._crm.get_deal(deal.id).flags:
             steps += self._advance(deal.id, Stage.MEETING)
             if self._crm.get_deal(deal.id).stage is Stage.MEETING:
                 steps += self._prepare_call_brief(lead, deal.id)
-        if "pricing_requested" in triage.flags:
+        if "pricing_requested" in flags:
             steps.append("Pricing question: a human must answer (pricing always needs approval)")
-        if "possible_prompt_injection" in triage.flags:
+        if "possible_prompt_injection" in flags:
             steps.append("Suspicious content: ignored as instructions, no lesson learned")
         return steps
-
-    def _answer_question(self, lead, deal_id: str, reply: Reply, question: str) -> list[str]:
-        """The prospect asked something before agreeing to meet: the outreach agent drafts an answer.
-        Whether it goes out alone or waits for a human is the policy's call (top tiers wait)."""
-        deal = self._crm.get_deal(deal_id)
-        lessons = self._lessons.for_segment(lead.segment, purpose="outreach")
-        try:
-            result = self._agents.outreach.answer(lead, deal, reply, question, lessons)
-        except DraftRejectedError as error:
-            return self._flag(deal, "outreach_draft_rejected", str(error))
-        if result.output.lessons_used:
-            lines = [f"Question to answer: {question}", f"Answer uses lessons: {', '.join(result.output.lessons_used)}"]
-        else:
-            lines = [f"Question to answer: {question}"]
-        return lines + self._submit(result.actions)
 
     def _email_answered_by(self, reply: Reply, deal: Deal) -> Message | None:
         """Which of our emails this reply answers: the exact one if the reply names it (In-Reply-To),
@@ -390,11 +407,16 @@ class Orchestrator:
         # Keep the call on the deal, as HubSpot keeps a call recording: the rep can read what was actually said.
         self._crm.log(deal.id, "call", f"Call recorded: {transcript_id}",
                       {"transcript_id": transcript_id, "transcript": transcript})
-        result = self._agents.call_intel.run(transcript_id, transcript, lead, deal)
-        intel = result.output
-        steps = [f"Call {intel.transcript_id}: budget {intel.fields.budget_usd}, signer {intel.fields.decision_maker}"]
-        steps += [f"Lesson learned: {lesson.text}" for lesson in intel.lessons]
-        steps += self._submit(result.actions)
+        run, lines = self._work(self._agents.call_intel.task(transcript_id, transcript, lead, deal))
+        fields = saved_fields(run)
+        steps = [f"Call {transcript_id}: budget {fields.budget_usd if fields else None}, "
+                 f"signer {fields.decision_maker if fields else None}"]
+        steps += [f"Lesson learned: {action.payload['lesson']['text']}" for action, result in run.results()
+                  if action.type is ActionType.RECORD_LESSON and result.outcome is Outcome.EXECUTED]
+        steps += lines
+        if fields is None:
+            steps += self._flag(self._crm.get_deal(deal.id), "call_needs_review",
+                                f"the call intel agent saved nothing from {transcript_id}")
 
         steps += self._advance(deal.id, Stage.QUALIFIED)
         deal = self._crm.get_deal(deal.id)
@@ -536,6 +558,14 @@ class Orchestrator:
                        payload={"signed_by": envelope.signed_by, "envelope_id": envelope.id})
         return steps + self._submit([close])
 
+    def _on_follow_up_due(self, event: Event) -> list[str]:
+        """A follow-up an agent scheduled is due: remind the rep, once."""
+        deal = self._crm.get_deal(event.payload["deal_id"])
+        lead = self._crm.get_lead(deal.lead_id)
+        reminder = f"Follow up with {lead.contact.name} today: {event.payload['reason']}"
+        self._crm.log(deal.id, "reminder", reminder, {"due": event.payload.get("due")})
+        return [f"{deal.id} {lead.company}: {reminder}"] + self._flag(deal, "follow_up_due", event.payload["reason"])
+
     def _on_sla_check(self, event: Event) -> list[str]:
         stalled = self._tracker.stalled(event.now)
         steps = [f"SLA check: {len(stalled)} stalled deal(s)"]
@@ -561,12 +591,24 @@ class Orchestrator:
 
     # --- Helpers ---------------------------------------------------------------
 
+    def _work(self, task: AgentTask, also: Callable[[Action, ActionResult], list[str]] | None = None
+              ) -> tuple[AgentRun, list[str]]:
+        """Run an agent's task. Each side effect it attempts is reported (and moves stages) as it happens."""
+        lines: list[str] = []
+
+        def on_result(action: Action, result: ActionResult) -> None:
+            lines.append(_line(action, result))
+            lines.extend(self._after(action, result))
+            if also:
+                lines.extend(also(action, result))
+
+        return self._agents.host.run(task, on_result), lines
+
     def _submit(self, actions: list[Action]) -> list[str]:
         steps = []
         for action in actions:
             result = self._gateway.submit(action, self._crm.get_deal(action.deal_id))
-            steps.append(f"{action.summary} -> {result.outcome.value}"
-                         + ("" if result.outcome is Outcome.EXECUTED else f" ({result.reason})"))
+            steps.append(_line(action, result))
             steps += self._after(action, result)
         return steps
 
@@ -605,6 +647,10 @@ class Orchestrator:
         action = Action(id=f"flag_deal:{deal.id}:{flag}", type=ActionType.FLAG_DEAL, agent=self.name,
                         deal_id=deal.id, summary=f"Flag {flag}: {detail}", payload={"flags": [flag]})
         return self._submit([action])
+
+
+def _line(action: Action, result: ActionResult) -> str:
+    return f"{action.summary} -> {result.outcome.value}" + ("" if result.outcome is Outcome.EXECUTED else f" ({result.reason})")
 
 
 # A reviewer may rewrite an email's wording before approving it; nothing else about an action can be edited.
