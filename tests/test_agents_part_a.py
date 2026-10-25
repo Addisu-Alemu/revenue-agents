@@ -269,3 +269,17 @@ def test_no_lessons_from_a_transcript_with_an_injection(tmp_path):
     assert "possible_prompt_injection" in system.crm.get_deal("D-001").flags
     assert {call.verdict for call in result.called("record_lesson")} == {Verdict.DENY}
     assert system.lessons.all() == []
+
+
+def test_each_field_keeps_the_words_it_came_from_and_invented_quotes_are_dropped(tmp_path, transcript):
+    answer = {**BRIGHTBITE_CALL, "sources": [
+        {"field": "budget_usd", "quote": "we have about 250 thousand dollars for Q1"},
+        {"field": "scope", "quote": "Ken said all 420 locations right away"},  # never said
+    ]}
+    system, result, _ = call_run(tmp_path, transcript, answer)
+    [note] = [a for a in system.crm.timeline("D-001") if a.summary.startswith("Deal fields from call")]
+
+    budget = note.data["sources"]["budget_usd"]
+    assert (budget["speaker"], budget["at"], budget["value"]) == ("Ken Adeyemi", "00:01:30", "250000")
+    assert "scope" not in note.data["sources"]
+    assert "Quotes not found in the transcript, dropped: scope" in result.called("update_deal_fields")[0].result

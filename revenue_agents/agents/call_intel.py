@@ -9,6 +9,7 @@ are never learned from a transcript that contains instructions aimed at an AI.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import Field
@@ -38,6 +39,8 @@ Extract only what was actually said. Leave a field empty if it wasn't discussed;
 - flight_start / flight_end: ISO dates (YYYY-MM-DD) for when the campaign runs.
 - decision_maker: who signs the contract, as "Name (Title)".
 List the customer's pains and objections in a few words each.
+sources: for each field you fill, the field name and a short quote, copied word for word from the transcript, that
+supports it. Code checks every quote against the transcript; a quote that isn't there is dropped.
 Lessons: up to three reusable, one-sentence insights about selling to this kind of customer (scope "segment"), not
 facts about this one deal. An insight that would help sell to any kind of customer, e.g. how to handle a contract,
 budget or timing objection, has scope "global" (up to two). Never record the same insight twice.
@@ -45,10 +48,25 @@ update_deal_fields tells you which fields it accepted and what is still missing 
 When you are done, reply with one short sentence and stop."""
 
 
+FieldName = Literal["budget_usd", "products", "scope", "flight_start", "flight_end", "decision_maker",
+                    "payment_terms", "contract_term", "special_terms", "next_step"]
+
+# A transcript line: "[00:01:30] Ken Adeyemi: For a pilot, we have about 250 thousand dollars ..."
+TRANSCRIPT_LINE = re.compile(r"^\[(?P<at>[\d:]+)\]\s*(?P<speaker>[^:]+):\s*(?P<text>.*)$")
+
+
+class FieldSource(Model):
+    """Where a field came from: the words in the transcript that support it."""
+
+    field: FieldName
+    quote: str = Field(max_length=300)
+
+
 class CallDigest(Model):
     """The scripted model's reading of a call (the real model writes the same things through its tools)."""
 
     deal_fields: DealFields
+    sources: list[FieldSource] = Field(default_factory=list)
     pains: list[str] = Field(default_factory=list)
     objections: list[str] = Field(default_factory=list)
     lessons: list[str] = Field(default_factory=list, max_length=3)
@@ -58,6 +76,7 @@ class CallDigest(Model):
 class DealUpdate(DealFields):
     pains: list[str] = Field(default_factory=list)
     objections: list[str] = Field(default_factory=list)
+    sources: list[FieldSource] = Field(default_factory=list)
 
 
 class LessonInput(Model):
@@ -88,22 +107,30 @@ class CallIntelAgent(Agent):
                                     f"Fields known so far: {known or 'none'}\n"
                                     f"A proposal needs: {', '.join(PROPOSAL_FIELDS)}"))
 
+        def checked(args: DealUpdate) -> tuple[DealFields, list[str], dict[str, dict], list[str]]:
+            fields, flags = check_fields(DealFields.model_validate(
+                args.model_dump(exclude={"pains", "objections", "sources"})), products)
+            sources, dropped = locate_quotes(args.sources, fields, transcript, transcript_id)
+            return fields, flags, sources, dropped
+
         def update(args: DealUpdate):
-            fields, flags = check_fields(DealFields.model_validate(args.model_dump(exclude={"pains", "objections"})),
-                                         products)
+            fields, flags, sources, _ = checked(args)
             if signals:
                 flags.append("possible_prompt_injection")
             return self.propose(ActionType.UPDATE_DEAL, deal, f"call:{transcript_id}",
                                 summary=f"Deal fields from call {transcript_id}",
                                 payload={"fields": fields.model_dump(mode="json"), "pains": args.pains,
-                                         "objections": args.objections, "flags": flags})
+                                         "objections": args.objections, "flags": flags, "sources": sources})
 
         def updated(args: DealUpdate, result: ActionResult) -> ToolResult:
             current = self._crm.get_deal(deal.id)
             missing = [name for name in PROPOSAL_FIELDS if not getattr(current.fields, name)]
             flags = [flag for flag in current.flags if flag in ("unknown_product_mentioned", "check_flight_dates")]
+            dropped = checked(args)[3]
             return ToolResult(text=(f"Saved. Still missing for a proposal: {', '.join(missing) or 'nothing'}."
-                                    + (f" Code flagged: {', '.join(flags)}." if flags else "")),
+                                    + (f" Code flagged: {', '.join(flags)}." if flags else "")
+                                    + (f" Quotes not found in the transcript, dropped: {', '.join(dropped)}."
+                                       if dropped else "")),
                               data={"missing": missing})
 
         def lesson_rule(args: LessonInput) -> str | None:
@@ -130,7 +157,7 @@ class CallIntelAgent(Agent):
             s.call("read_deal")
             digest = s.ask(CallDigest)
             s.call("update_deal_fields", **digest.deal_fields.model_dump(mode="json"), pains=digest.pains,
-                   objections=digest.objections)
+                   objections=digest.objections, sources=[source.model_dump() for source in digest.sources])
             for text in digest.lessons:
                 s.call("record_lesson", text=text, scope="segment")
             for text in digest.general_lessons:
@@ -160,6 +187,31 @@ def saved_fields(run: AgentRun) -> DealFields | None:
         if call.action is not None and call.outcome in (Outcome.EXECUTED, Outcome.DUPLICATE):
             return DealFields.model_validate(call.action.payload["fields"])
     return None
+
+
+def locate_quotes(sources: list[FieldSource], fields: DealFields, transcript: str,
+                  transcript_id: str) -> tuple[dict[str, dict], list[str]]:
+    """Keep only quotes that really are in the transcript, for fields that were filled, with who said them and when.
+
+    Returns the kept sources by field, and the fields whose quote wasn't found.
+    """
+    lines = [match for line in transcript.splitlines() if (match := TRANSCRIPT_LINE.match(line.strip()))]
+    kept, dropped = {}, []
+    for source in sources:
+        if getattr(fields, source.field) in (None, "", []):
+            continue  # a quote for a field that wasn't kept (e.g. invalid dates) proves nothing
+        quote = _words(source.quote)
+        line = next((match for match in lines if quote and quote in _words(match["text"])), None)
+        if line is None:
+            dropped.append(source.field)
+            continue
+        kept[source.field] = {"quote": source.quote.strip(), "speaker": line["speaker"].strip(), "at": line["at"],
+                              "transcript_id": transcript_id, "value": str(getattr(fields, source.field))}
+    return kept, dropped
+
+
+def _words(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9$]+", text.lower()))
 
 
 def check_fields(fields: DealFields, allowed_products: list[str]) -> tuple[DealFields, list[str]]:

@@ -77,8 +77,10 @@ class ActionHandlers:
         flags = [flag for flag in flags if flag not in action.payload.get("clear_flags", [])]  # e.g. a change resolved
         updates: dict[str, Any] = {"fields": fields, "flags": flags}
         self._crm.save_deal(deal.model_copy(update=updates))
+        filled = [key for key, value in action.payload.get("fields", {}).items() if value not in (None, "", [])]
         self._crm.log(deal.id, "note", action.summary,
-                      {key: action.payload.get(key, []) for key in ("pains", "objections")})
+                      {**{key: action.payload.get(key, []) for key in ("pains", "objections")}, "fields": filled,
+                       "sources": action.payload.get("sources", {})})
 
     def flag_deal(self, action: Action) -> None:
         deal = self._crm.get_deal(action.deal_id)

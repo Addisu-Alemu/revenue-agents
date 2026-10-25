@@ -36,7 +36,7 @@ st.session_state.pages = {
     "inbox": st.Page(inbox.render, title=f"Inbox · {waiting}" if waiting else "Inbox", icon=":material/inbox:",
                      url_path="inbox"),
     "pipeline": st.Page(pipeline.render, title="Pipeline", icon=":material/view_kanban:", url_path="pipeline"),
-    "deal": st.Page(deal_detail.render, title="Deal detail", icon=":material/person_search:", url_path="deal"),
+    "deal": st.Page(deal_detail.render, title="Deal room", icon=":material/person_search:", url_path="deal"),
     "team": st.Page(team.render, title="Team", icon=":material/groups:", url_path="team"),
     "trace": st.Page(agent_trace.render, title="Agent trace", icon=":material/account_tree:", url_path="trace"),
 }

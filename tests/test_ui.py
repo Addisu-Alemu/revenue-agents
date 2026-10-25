@@ -290,3 +290,15 @@ def test_the_knowledge_loop_shows_what_was_learned_and_where_it_was_used(isolate
     deal.run()
     assert "Shaped by what the system learned" in texts(deal)  # the sent email names the lesson, in words
     assert "Franchise brands care more about brand control than speed" in texts(deal)
+
+
+def test_the_deal_room_tells_the_story_and_the_plan(isolated_state):
+    world_until(isolated_state, at(13, 0))
+    test = page("deal")
+    text = texts(test)
+
+    assert not test.exception
+    assert "The story so far" in text and "The plan from here" in text
+    assert "Deal fields, with where each came from" in text
+    assert "Ken, discovery call 00:01:30" in text
+    assert "Closed won and handed off to delivery. Nothing left to do here." in text

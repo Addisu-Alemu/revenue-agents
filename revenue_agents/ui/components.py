@@ -40,6 +40,30 @@ CSS = """
   .ra-column-title { font-weight: 650; font-size: 0.9rem; color: #374151; margin-bottom: 0.2rem; }
   .ra-email { background: #F8F9FC; border: 1px solid #E5E7EB; border-left: 3px solid #4F46E5;
               border-radius: 0.5rem; padding: 0.8rem 1rem; white-space: pre-wrap; font-size: 0.92rem; }
+  /* Deal room */
+  .ra-stages { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 6px; margin: 0.4rem 0 1.2rem; }
+  .ra-stages div { border-top: 4px solid #E5E7EB; padding-top: 6px; font-size: 0.78rem; color: #6B7280; }
+  .ra-stages .done { border-color: #7C3AED; }
+  .ra-stages .now { border-color: #DC2626; color: #111827; font-weight: 650; }
+  .ra-day { font-size: 0.74rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: #6B7280;
+            margin: 1rem 0 0.2rem; padding-bottom: 0.3rem; border-bottom: 1px solid #E5E7EB; }
+  .ra-beat { display: grid; grid-template-columns: 3.2rem 0.8rem 1fr; gap: 0.4rem; align-items: baseline;
+             padding: 0.45rem 0; border-bottom: 1px solid #F1F2F5; font-size: 0.93rem; }
+  .ra-time { font-family: ui-monospace, Menlo, monospace; font-size: 0.8rem; color: #6B7280; }
+  .ra-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .ra-quote { background: #F8F9FC; border-radius: 0.4rem; padding: 0.4rem 0.7rem; margin-top: 0.35rem;
+              color: #374151; }
+  .st-key-ra-plan { background: #17132A; color: #F5F3FF; border-radius: 0.8rem; padding: 1.1rem 1.2rem; }
+  .st-key-ra-plan h4, .st-key-ra-plan p, .st-key-ra-plan div { color: #F5F3FF; }
+  .ra-step { display: grid; grid-template-columns: 1.2rem 1fr; gap: 0.3rem; padding: 0.3rem 0; font-size: 0.93rem; }
+  .ra-step span { color: #A78BFA; }
+  .ra-step.ra-you span { color: #F97316; }
+  .ra-step.ra-you div { font-weight: 650; }
+  .ra-plan-note { font-size: 0.8rem; opacity: 0.7; margin-top: 0.4rem; }
+  .ra-field { padding: 0.45rem 0; border-bottom: 1px solid #F1F2F5; }
+  .ra-field-top { display: flex; justify-content: space-between; gap: 0.8rem; font-size: 0.93rem; }
+  .ra-field-top b { text-align: right; }
+  @media (max-width: 700px) { .ra-stages { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 </style>
 """
 
@@ -80,6 +104,18 @@ def flag_badges(flags: list[str]) -> None:
                 st.badge(flag.replace("_", " "), icon=":material/hourglass_bottom:", color="yellow")
             else:
                 st.badge(flag.replace("_", " "), color="blue")
+
+
+def stage_bar(deal: Deal) -> None:
+    """The stages as a row of bars, like the deal room mockup: done, where the deal is now, still to come."""
+    if deal.stage is Stage.CLOSED_LOST:
+        st.badge("Closed lost", color="gray")
+        return
+    position = ORDER.index(deal.stage)
+    won = deal.stage is Stage.HANDOFF
+    cells = "".join(f"<div class='{'done' if i < position or won else 'now' if i == position else ''}'>"
+                    f"{STAGE_LABELS[stage]}</div>" for i, stage in enumerate(ORDER))
+    st.markdown(f"<div class='ra-stages'>{cells}</div>", unsafe_allow_html=True)
 
 
 def stage_progress(deal: Deal) -> None:
@@ -228,7 +264,7 @@ def styled_line(line: str) -> str:
     if text.startswith(("Lesson", "Draft uses lessons")):
         return f":material/psychology: :blue[{text}]"
     if text.startswith("Call brief"):
-        return f":material/assignment: :blue[**{text}**] (see Deal detail → Call brief)"
+        return f":material/assignment: :blue[**{text}**] (see Deal room → Call brief)"
     if text.startswith(("Already handled", "Same webhook")):
         return f":material/content_copy: :gray[{text}]"
     if "→ executed" in text or text.startswith(("Approved", "Closed won")):

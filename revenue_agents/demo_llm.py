@@ -69,6 +69,11 @@ CALL_ANSWERS: dict[str, dict[str, Any]] = {
             "decision_maker": "Ken (CFO)",
             "next_step": "Second call with Ken (CFO) this week: cost, measurement and contract length",
         },
+        "sources": [
+            {"field": "products", "quote": "Our Create product does dynamic creative"},
+            {"field": "decision_maker", "quote": "Our CFO, Ken, signs off on anything like this"},
+            {"field": "next_step", "quote": "Can we do a second call with him?"},
+        ],
         "pains": ["6 weeks to localize each campaign", "franchisees break brand guidelines"],
         "objections": ["CFO wary of long vendor contracts"],
         "lessons": [
@@ -92,6 +97,18 @@ CALL_ANSWERS: dict[str, dict[str, Any]] = {
             "special_terms": "Include example of the franchisee approval workflow",
             "next_step": "Send proposal and draft IO by Friday",
         },
+        "sources": [
+            {"field": "budget_usd", "quote": "we have about 250 thousand dollars for Q1"},
+            {"field": "products", "quote": "Create dynamic creative plus Activate local targeting"},
+            {"field": "scope", "quote": "Let's start with the 120 locations in the Southeast region"},
+            {"field": "flight_start", "quote": "January 15th to April 15th"},
+            {"field": "flight_end", "quote": "January 15th to April 15th"},
+            {"field": "decision_maker", "quote": "Final sign-off is mine for anything over 100 thousand"},
+            {"field": "payment_terms", "quote": "net 30 payment terms, please"},
+            {"field": "contract_term", "quote": "I'd want a three-month pilot with an option to extend"},
+            {"field": "special_terms", "quote": "include an example of the franchisee approval workflow"},
+            {"field": "next_step", "quote": "I'll send a proposal and a draft insertion order by Friday"},
+        ],
         "pains": ["need to measure return per location"],
         "objections": ["no long contracts"],
         "lessons": [
