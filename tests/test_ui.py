@@ -142,10 +142,8 @@ def test_approving_in_the_inbox_goes_through_the_desk(isolated_state):
     assert [a.kind for a in system.crm.timeline("D-001")][-2:] == ["email_sent", "stage_change"]
 
 
-def test_after_the_last_decision_you_are_back_on_today_and_the_clock_runs_again(isolated_state, monkeypatch):
+def test_after_the_last_decision_you_are_back_on_today(isolated_state, monkeypatch):
     desk = world_until(isolated_state, at(1, 10), approve=False)
-    desk.world.play()
-    desk.world.wait_for_you("First email to Maya Thompson at BrightBite Burgers waits for you")
     original = live.decide
 
     def decide_now(world, *args, **kwargs):  # no runner in tests: deliver the decision here
@@ -166,7 +164,6 @@ def test_after_the_last_decision_you_are_back_on_today_and_the_clock_runs_again(
     assert went_to == ["today"]
     assert test.session_state["flash"][0] == ("Approved: First email to Maya Thompson at BrightBite Burgers. Nothing "
                                               "else waits for you.")
-    assert desk.world.read().running
 
 
 def test_when_more_waits_the_next_one_opens_in_the_inbox(isolated_state, monkeypatch):

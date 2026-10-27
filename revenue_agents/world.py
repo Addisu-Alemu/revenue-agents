@@ -146,11 +146,6 @@ class World:
         self._change(lambda s: s.model_copy(update={"running": False, "paused_for": why})
                      if s.running and s.auto_pause else s)
 
-    def carry_on(self) -> None:
-        """You decided what the clock stopped for: start it again. A pause you made yourself stays."""
-        self._change(lambda s: s.model_copy(update={"running": True, "paused_for": None})
-                     if s.paused_for and not s.running else s)
-
     def pause(self) -> None:
         self._change(lambda s: s.model_copy(update={"running": False}))
 
@@ -317,8 +312,6 @@ class Desk:
         if new:
             more = f" (and {len(new) - 1} more)" if len(new) > 1 else ""
             self.world.wait_for_you(f"{new[0].action.summary} waits for you{more}")
-        elif item.source == "you" and not system.approvals.pending():
-            self.world.carry_on()
         delivered = Delivered(id=item.id, at=self.world.now(), label=item.label, source=item.source, status=status,
                               steps=steps, events=events)
         self.world.finish(item, delivered)
