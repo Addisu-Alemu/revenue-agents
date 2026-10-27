@@ -25,7 +25,8 @@ from pydantic import BaseModel, ValidationError
 
 T = TypeVar("T", bound=BaseModel)
 
-DEFAULT_MODEL = "claude-opus-5-5"
+# Sonnet: fast enough to watch the agents work live. Set REVENUE_AGENTS_MODEL (e.g. claude-opus-5-5) in the shell to change it.
+DEFAULT_MODEL = os.environ.get("REVENUE_AGENTS_MODEL", "claude-sonnet-5-5")
 
 
 class LLMError(RuntimeError):

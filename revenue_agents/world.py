@@ -258,7 +258,7 @@ class Desk:
         self.state_dir = Path(state_dir)
         self.world = World(self.state_dir)
         self._pace = pace  # scripted mode only: seconds per tool call, so people can watch the agents work
-        self._voice = voice
+        self._voice = voice  # a model that rewords the buyers' replies (claude mode only); off unless given
         self._systems: dict[str, System] = {}
         self._simulators: dict[str, BuyerSimulator] = {}
         self.live = LiveBoard(self.state_dir)
@@ -275,7 +275,7 @@ class Desk:
     def simulator(self) -> BuyerSimulator:
         model = self.world.read().model
         if model not in self._simulators:
-            self._simulators[model] = BuyerSimulator(voice=(self._voice or ClaudeLLM()) if model == "claude" else None)
+            self._simulators[model] = BuyerSimulator(voice=self._voice if model == "claude" else None)
         return self._simulators[model]
 
     def start(self, model: str = "scripted") -> None:
