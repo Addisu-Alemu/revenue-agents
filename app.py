@@ -91,6 +91,7 @@ with st.sidebar:
     if desk.world.exists() and st.button("Start over", icon=":material/restart_alt:", type="tertiary"):
         _confirm_restart()
 
+components.show_flash()
 st.navigation({
     "Desk": [pages["today"], pages["inbox"]],
     "Deals": [pages["pipeline"], pages["deal"]],

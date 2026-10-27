@@ -26,8 +26,14 @@ def render() -> None:
                       if context.in_segment(system.crm.get_deal(r.action.deal_id))), key=lambda r: r.created_at)
     waiting = system.orchestrator.approved_waiting()
     if not pending and not waiting:
-        st.success("Nothing waits for you. New items appear here the moment an agent stops for you.",
-                   icon=":material/task_alt:")
+        elsewhere = len(system.approvals.pending())
+        if elsewhere:  # the segment filter hides them: say so rather than "nothing waits"
+            st.info(f"{elsewhere} wait{'s' if elsewhere == 1 else ''} for you in another segment.",
+                    icon=":material/filter_alt:")
+            st.button("Show all segments", on_click=_show_all, icon=":material/filter_alt_off:")
+        else:
+            st.success("Nothing waits for you. New items appear here the moment an agent stops for you.",
+                       icon=":material/task_alt:")
         _history(system)
         return
 
@@ -63,6 +69,10 @@ def render() -> None:
             if request.action.type is ActionType.SEND_EMAIL:
                 _evidence(system, system.crm.get_deal(request.action.deal_id), request.action.payload)
     _history(system)
+
+
+def _show_all() -> None:
+    st.session_state.segment = "all"
 
 
 def _detail(desk, system, spans, request, run) -> None:
@@ -185,10 +195,18 @@ def _decide(desk, system, request, approved: bool, note: str, keep: bool, edits:
     with st.spinner("The desk is on it…"):
         done = live.decide(desk.world, system, request, approved, context.reviewer(), note.strip() or None, keep,
                            edits)
-    if not done:
-        st.toast("Sent to the desk: it will be done as soon as the current step finishes.", icon=":material/schedule:")
     st.session_state.pop("inbox_selected", None)
-    st.rerun()
+    if not done:
+        components.flash("Sent to the desk: it will be done as soon as the current step finishes.",
+                         ":material/schedule:")
+        st.rerun()
+    verb = "Approved" if approved else ("Coached" if note.strip() else "Rejected")
+    left = [r for r in system.approvals.pending() if context.in_segment(system.crm.get_deal(r.action.deal_id))]
+    if left:  # the next one opens here, oldest first
+        components.flash(f"{verb}: {request.action.summary}. Next: {left[0].action.summary}", ":material/task_alt:")
+        st.rerun()
+    components.flash(f"{verb}: {request.action.summary}. Nothing else waits for you.", ":material/task_alt:")
+    st.switch_page(st.session_state.pages["today"])
 
 
 def _waiting_card(desk, request, key: str) -> None:

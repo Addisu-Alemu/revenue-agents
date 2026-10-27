@@ -136,6 +136,16 @@ def inject_css() -> None:
     st.html(CSS)
 
 
+def flash(message: str, icon: str) -> None:
+    """A short confirmation that survives the rerun or page switch that follows a decision."""
+    st.session_state.flash = (message, icon)
+
+
+def show_flash() -> None:
+    if flash := st.session_state.pop("flash", None):
+        st.toast(flash[0].replace("$", "\\$"), icon=flash[1])
+
+
 def page_header(title: str, subtitle: str) -> None:
     st.title(title)
     st.markdown(f"<p class='ra-muted'>{subtitle}</p>", unsafe_allow_html=True)

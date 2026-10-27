@@ -8,10 +8,12 @@ import datetime as dt
 from pathlib import Path
 
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from revenue_agents.events import approval_event
 from revenue_agents.storage import set_clock
+from revenue_agents.ui import live
 from revenue_agents.world import Desk, World
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -138,6 +140,64 @@ def test_approving_in_the_inbox_goes_through_the_desk(isolated_state):
     system = desk.system()
     assert system.approvals.get(MAYA_EMAIL).status.value == "approved"
     assert [a.kind for a in system.crm.timeline("D-001")][-2:] == ["email_sent", "stage_change"]
+
+
+def test_after_the_last_decision_you_are_back_on_today_and_the_clock_runs_again(isolated_state, monkeypatch):
+    desk = world_until(isolated_state, at(1, 10), approve=False)
+    desk.world.play()
+    desk.world.wait_for_you("First email to Maya Thompson at BrightBite Burgers waits for you")
+    original = live.decide
+
+    def decide_now(world, *args, **kwargs):  # no runner in tests: deliver the decision here
+        original(world, *args, **kwargs)
+        desk.step()
+        return True
+
+    monkeypatch.setattr(live, "decide", decide_now)
+    went_to = []
+    monkeypatch.setattr(st, "switch_page", went_to.append)
+    test = AppTest.from_file(HARNESS, default_timeout=30)
+    test.session_state["page"] = "inbox"
+    test.session_state["pages"] = {"today": "today"}
+    test.run()
+    button(test, "Approve").click().run()
+
+    assert not test.exception
+    assert went_to == ["today"]
+    assert test.session_state["flash"][0] == ("Approved: First email to Maya Thompson at BrightBite Burgers. Nothing "
+                                              "else waits for you.")
+    assert desk.world.read().running
+
+
+def test_when_more_waits_the_next_one_opens_in_the_inbox(isolated_state, monkeypatch):
+    desk = world_until(isolated_state, at(1, 12), approve=False)  # BrightBite and Lumen wait
+    original = live.decide
+
+    def decide_now(world, *args, **kwargs):
+        original(world, *args, **kwargs)
+        desk.step()
+        return True
+
+    monkeypatch.setattr(live, "decide", decide_now)
+    went_to = []
+    monkeypatch.setattr(st, "switch_page", went_to.append)
+    test = page("inbox")
+    button(test, "Approve").click().run()
+
+    assert not went_to
+    assert test.session_state["flash"][0].endswith("Next: First email to Priya Raman at Lumen Media Group")
+    assert "Priya Raman" in texts(test)
+
+
+def test_the_inbox_says_when_the_segment_filter_hides_what_waits(isolated_state):
+    world_until(isolated_state, at(1, 10), approve=False)  # Maya's email waits in the brand pack
+    test = page("inbox")
+    test.session_state["segment"] = "agency"
+    test.run()
+
+    assert "1 waits for you in another segment." in [i.value for i in test.info]
+    button(test, "Show all segments").click().run()
+    assert test.session_state["segment"] == "all"
 
 
 def test_coaching_redrafts_and_can_teach_a_lesson(isolated_state):
