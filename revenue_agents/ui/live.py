@@ -22,7 +22,7 @@ from revenue_agents.storage import set_clock
 from revenue_agents.system import System, reset_state
 from revenue_agents.world import Desk, Runner, World
 
-PACE = 0.5  # scripted mode: seconds before each tool call, so people can watch the agents work
+PACE = 0.2  # scripted mode: seconds before each tool call, so people can watch the agents work
 WAIT = 8.0  # how long a click waits for the desk to finish it before the page moves on
 
 
