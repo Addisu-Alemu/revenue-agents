@@ -304,3 +304,41 @@ def test_auto_pause_can_be_turned_off(desk):
     desk.step()
     assert desk.world.read().running and desk.system().approvals.pending()
 
+
+def test_the_clock_starts_again_once_you_decide_what_it_stopped_for(desk):
+    desk.world.play()
+    desk.world.skip()
+    desk.step()  # BrightBite's first email waits: the clock stops itself
+    request = desk.system().approvals.pending()[0]
+
+    desk.world.submit(approval_event(request.id, True, "you@cool.example"), "You approved the first email")
+    desk.step()
+
+    state = desk.world.read()
+    assert state.running and state.paused_for is None
+
+
+def test_a_redraft_keeps_the_clock_waiting_for_the_new_version(desk):
+    desk.world.play()
+    desk.world.skip()
+    desk.step()
+    request = desk.system().approvals.pending()[0]
+
+    desk.world.submit(approval_event(request.id, False, "you@cool.example", "Mention their Q1 menu launch"), "Coached")
+    desk.step()  # v2 now waits for you
+
+    assert not desk.world.read().running
+
+
+def test_a_pause_you_made_stays_after_a_decision(desk):
+    desk.world.set_auto_pause(False)
+    desk.world.play()
+    desk.world.skip()
+    desk.step()
+    desk.world.pause()  # you stopped the clock yourself
+    request = desk.system().approvals.pending()[0]
+
+    desk.world.submit(approval_event(request.id, True, "you@cool.example"), "You approved the first email")
+    desk.step()
+
+    assert not desk.world.read().running

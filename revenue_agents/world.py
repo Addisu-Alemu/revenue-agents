@@ -32,7 +32,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from revenue_agents.events import Event, digest_event, follow_up_event, lead_event, sla_event
+from revenue_agents.events import Event, EventType, digest_event, follow_up_event, lead_event, sla_event
 from revenue_agents.llm import ClaudeLLM, LLMError
 from revenue_agents.models import Model
 from revenue_agents.runtime import ScriptedRuntime
@@ -145,6 +145,11 @@ class World:
         """Something new needs a human: stop the clock (if it runs and auto-pause is on) and say why."""
         self._change(lambda s: s.model_copy(update={"running": False, "paused_for": why})
                      if s.running and s.auto_pause else s)
+
+    def carry_on(self) -> None:
+        """You decided what the clock stopped for: start it again. A pause you made yourself stays."""
+        self._change(lambda s: s.model_copy(update={"running": True, "paused_for": None})
+                     if s.paused_for and not s.running else s)
 
     def pause(self) -> None:
         self._change(lambda s: s.model_copy(update={"running": False}))
@@ -312,6 +317,8 @@ class Desk:
         if new:
             more = f" (and {len(new) - 1} more)" if len(new) > 1 else ""
             self.world.wait_for_you(f"{new[0].action.summary} waits for you{more}")
+        elif item.source == "you" and (item.event or {}).get("type") == EventType.APPROVAL_DECIDED.value:
+            self.world.carry_on()  # your decision is in and nothing new waits: the world goes on
         delivered = Delivered(id=item.id, at=self.world.now(), label=item.label, source=item.source, status=status,
                               steps=steps, events=events)
         self.world.finish(item, delivered)
