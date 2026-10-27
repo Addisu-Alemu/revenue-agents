@@ -292,7 +292,7 @@ def test_the_deal_page_shows_research_meeting_and_call_brief(isolated_state):
 
     assert test.title[0].value == "BrightBite Burgers"
     assert "**Why now** (research agent): 60 new franchise locations" in text
-    assert "Meeting with BrightBite Burgers booked for Thu 08 Oct 15:00 UTC" in text
+    assert "Meeting with BrightBite Burgers booked for Mon 05 Oct 15:00 UTC" in text
     assert any("Call brief: BrightBite Burgers" in m.value for m in test.markdown)
 
 

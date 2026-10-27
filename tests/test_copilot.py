@@ -56,13 +56,14 @@ def test_rules_in_code_refuse_what_it_shouldn_t_do(desk):
     system = desk.system()
     task = system.orchestrator._agents.copilot.task("test", "ask:test")
     task.script = lambda s: [s.call("set_follow_up", deal_id=deal, on="2026-10-12", reason="test")
-                             for deal in ("D-003", "D-005", "D-001")]
+                             for deal in ("D-003", "D-005", "D-001", "D-004")]
     calls = run(system, task).calls
 
-    assert [(call.verdict, call.reason) for call in calls[:2]] == [
+    assert [(call.verdict, call.reason) for call in calls[:3]] == [
         (Verdict.DENY, "D-003 was never contacted: nothing to follow up"),  # Tier C, left for nurture
-        (Verdict.DENY, "D-005 already has a follow-up set for 2027-01-05")]  # the buyer set the date
-    assert (calls[2].verdict, calls[2].outcome.value) == (Verdict.ALLOW, "executed")  # BrightBite: allowed
+        (Verdict.DENY, "D-005 already has a follow-up set for 2027-01-05"),  # the buyer set the date
+        (Verdict.DENY, "D-001 is closed: nothing to follow up")]  # BrightBite signed on 7 October
+    assert (calls[3].verdict, calls[3].outcome.value) == (Verdict.ALLOW, "executed")  # Lumen: allowed
 
 
 def test_it_may_not_send_email_or_touch_contracts(desk):

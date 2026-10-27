@@ -26,7 +26,7 @@ def test_demo_runs_the_live_world_end_to_end(tmp_path):
     assert code == 0
     assert "NOTE: scripted mode" in output
     assert "APPROVAL NEEDED: First email to Maya Thompson" in output
-    assert "Meeting with BrightBite Burgers booked for Thu 08 Oct 15:00 UTC" in output  # the reply agent booked it
+    assert "Meeting with BrightBite Burgers booked for Mon 05 Oct 15:00 UTC" in output  # the reply agent booked it
     assert "Already handled: ignored" in output  # Maya's webhook delivered twice
     assert "Stage proposal -> signature" in output
     assert "Rejected: unknown envelope 'ENV-FAKE-001'" in output

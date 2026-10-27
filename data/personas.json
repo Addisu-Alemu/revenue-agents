@@ -5,9 +5,9 @@
       {"after": "email", "nth": 1, "reply": "R-000", "min_hours": 6},
       {"after": "email", "nth": 2, "reply": "R-001", "min_hours": 6, "duplicate": true},
       {"after": "meeting", "call": "L-001_intro_call", "minutes_after": 45},
-      {"after": "call", "nth": 1, "call": "L-001_discovery_call", "min_hours": 48},
+      {"after": "call", "nth": 1, "call": "L-001_discovery_call", "min_hours": 24},
       {"after": "io_sent", "nth": 1, "reply": "R-004", "min_hours": 20},
-      {"after": "io_sent", "nth": 2, "sign": "Ken Adeyemi", "min_hours": 20, "forged_first": true}
+      {"after": "io_sent", "nth": 2, "sign": "Ken Adeyemi", "min_hours": 6, "forged_first": true}
     ]
   },
   "L-002": {

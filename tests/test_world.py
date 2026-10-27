@@ -124,16 +124,16 @@ def test_a_reply_comes_after_the_email_actually_went_out(desk):
     desk.run_until(at(4, 23))
     [reply] = [d for d in desk.world.log() if d.label == "Maya replies"]
 
-    assert reply.at == at(3, 18)  # six hours after it was sent, not at the scripted time (3 Oct 14:10)
+    assert reply.at == at(3, 18)  # six hours after it was sent, not at the scripted time (1 Oct 16:10)
 
 
 def test_the_meeting_the_agent_booked_is_when_the_call_happens(desk):
     desk.run_until(at(9, 23), between=approve_everything(desk))
     [booked] = [a for a in desk.system().crm.timeline("D-001") if a.kind == "meeting_booked"]
-    [call] = [d for d in desk.world.log() if d.label == "Call with BrightBite Burgers ends"]
+    first_call = [d for d in desk.world.log() if d.label == "Call with BrightBite Burgers ends"][0]
 
-    assert dt.datetime.fromisoformat(booked.data["when"]) == at(8, 15)
-    assert call.at == at(8, 15, 45)
+    assert dt.datetime.fromisoformat(booked.data["when"]) == at(5, 15)
+    assert first_call.at == at(5, 15, 45)
 
 
 def test_a_duplicate_webhook_is_handled_once(desk):
@@ -170,7 +170,7 @@ def test_a_voiced_buyer_answers_the_email_the_agents_actually_sent(tmp_path):
     desk.run_until(at(4, 0), between=approve_everything(desk))
     set_clock(None)
 
-    [message] = [m for m in desk.system().crm.messages("D-001") if m.direction == "inbound"]
+    message = [m for m in desk.system().crm.messages("D-001") if m.direction == "inbound"][0]
     assert message.body.startswith("Thanks Daniel. How do you stop")
     assert "Maya Thompson, VP of Marketing" in voice.calls[0].system  # the hidden persona
     assert '<untrusted source="email:' in voice.calls[0].prompt  # our email, as data

@@ -28,10 +28,10 @@ REPLY_ANSWERS: dict[str, dict[str, Any]] = {
     },
     "R-001": {
         "intent": "meeting_request",
-        "summary": "Wants a 30-minute call next week; CFO to join. Franchisees want local ad versions.",
+        "summary": "Wants a 30-minute call on Monday; CFO to join. Franchisees want local ad versions.",
         "asks_for_pricing": False,
         "objections": [],
-        "suggested_next_step": "Offer Tuesday or Wednesday afternoon and invite the CFO.",
+        "suggested_next_step": "Offer Monday afternoon and invite the CFO.",
         "lesson": "Franchise marketers respond to the pain of slow local versions of national ads.",
         "lesson_quote": "Right now each regional version takes our team weeks.",
     },
@@ -236,7 +236,7 @@ def _research(call: LLMCall) -> dict[str, Any]:
                               {"why_now": "No buying signal in the data.", "angle": "the segment's first value prop"})
 
 
-# When the reply agent books a meeting someone asked for (Maya: "Tuesday or Wednesday afternoon").
+# When the reply agent books a meeting someone asked for (Maya: "Monday afternoon").
 MEETINGS: dict[str, dict[str, Any]] = {
     "R-001": {"days_from_now": 3, "hour_utc": 15, "attendees": ["Maya Thompson"],
               "note": "Intro call; Maya wants Ken (CFO) involved before any contract."},
